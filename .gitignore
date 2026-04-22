@@ -1,0 +1,10 @@
+.venv/
+build/
+build_terminal/
+output/
+output_*/
+parallel_benchmarks/
+benchmark_*/
+*.pt
+*.png
+__pycache__/
