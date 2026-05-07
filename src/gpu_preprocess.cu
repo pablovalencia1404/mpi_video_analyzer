@@ -1,4 +1,4 @@
-#include "rescue/gpu_preprocess.hpp"
+#include "rescue/gpu_preprocess_cuda.hpp"
 
 #include <cuda_runtime.h>
 

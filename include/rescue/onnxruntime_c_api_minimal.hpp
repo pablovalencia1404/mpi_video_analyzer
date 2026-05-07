@@ -1,5 +1,4 @@
-                                                                                                                                                                                                                                                                                                                                                                                                        #pragma once
-
+#pragma once
 #include <cstddef>
 #include <cstdint>
 
@@ -176,6 +175,7 @@ struct OrtSessionOptions;
 struct OrtMemoryInfo;
 struct OrtAllocator;
 struct OrtValue;
+struct OrtTypeInfo;
 struct OrtTensorTypeAndShapeInfo;
 struct OrtRunOptions;
 

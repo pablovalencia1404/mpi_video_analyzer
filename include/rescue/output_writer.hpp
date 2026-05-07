@@ -9,7 +9,9 @@ namespace rescue {
 
 struct OutputMetrics {
     int mpi_world_size = 0;
-    int requested_cuda_workers = 0;
+    int requested_workers = 0;
+    int processing_width = 1920;
+    int processing_height = 1080;
     double distributed_processing_ms = 0.0;
     double output_write_ms = 0.0;
     double total_wall_ms = 0.0;

@@ -6,28 +6,31 @@
 #include <string>
 #include <vector>
 
-#include "rescue/gpu_preprocess.hpp"
 #include "rescue/types.hpp"
 
 namespace rescue {
 
-class OrtYoloSession;
-
-class PeopleDetector {
+class IPeopleDetector {
 public:
-    explicit PeopleDetector(const AppConfig& config);
-    ~PeopleDetector();
-    std::vector<DetectionBox> detect(const GpuFrameArtifacts& frame_artifacts);
-    const std::string& backend_name() const noexcept;
-    const cv::Size& input_size() const noexcept;
-
-private:
-    std::unique_ptr<OrtYoloSession> ort_session_;
-    cv::Size input_size_{640, 640};
-    float score_threshold_ = 0.2f;
-    float nms_threshold_ = 0.45f;
-    int top_k_ = 5000;
-    std::string backend_name_ = "ONNX Runtime CUDA";
+    virtual ~IPeopleDetector() = default;
+    virtual const std::string& backend_name() const noexcept = 0;
+    virtual const cv::Size& input_size() const noexcept = 0;
 };
+
+struct GpuFrameArtifacts;
+struct OpenCLFrameArtifacts;
+
+class CudaPeopleDetector : public IPeopleDetector {
+public:
+    virtual std::vector<DetectionBox> detect(const GpuFrameArtifacts& frame_artifacts) = 0;
+};
+
+class OpenCLPeopleDetector : public IPeopleDetector {
+public:
+    virtual std::vector<DetectionBox> detect(const OpenCLFrameArtifacts& frame_artifacts) = 0;
+};
+
+std::unique_ptr<CudaPeopleDetector> create_cuda_detector(const AppConfig& config);
+std::unique_ptr<OpenCLPeopleDetector> create_opencl_detector(const AppConfig& config);
 
 }  // namespace rescue

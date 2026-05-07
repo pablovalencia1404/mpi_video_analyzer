@@ -1,0 +1,5 @@
+\babel@toc {spanish}{}\relax 
+\beamer@sectionintoc {1}{Contexto}{2}{0}{1}
+\beamer@sectionintoc {2}{Diseño}{5}{0}{2}
+\beamer@sectionintoc {3}{Evaluación}{12}{0}{3}
+\beamer@sectionintoc {4}{Cierre}{19}{0}{4}

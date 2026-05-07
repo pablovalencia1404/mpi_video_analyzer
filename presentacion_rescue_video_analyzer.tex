@@ -1,0 +1,651 @@
+\documentclass[aspectratio=169,11pt]{beamer}
+
+\usepackage[spanish]{babel}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage[scaled=0.96]{helvet}
+\usepackage{amsmath}
+\usepackage{array}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{tikz}
+\usepackage{pgfplots}
+
+\usetikzlibrary{arrows.meta,calc,fit,positioning,shapes.geometric}
+\pgfplotsset{compat=1.18}
+\renewcommand{\familydefault}{\sfdefault}
+
+\definecolor{Ink}{HTML}{12263A}
+\definecolor{Slate}{HTML}{35506B}
+\definecolor{Soft}{HTML}{EEF3F7}
+\definecolor{Accent}{HTML}{1F9D8B}
+\definecolor{AccentLight}{HTML}{D8F3EE}
+\definecolor{Amber}{HTML}{F2B134}
+\definecolor{Terracotta}{HTML}{D9785B}
+\definecolor{GraphGray}{HTML}{6B7280}
+\definecolor{LineSoft}{HTML}{D7E0E8}
+\definecolor{DeepBlue}{HTML}{274C77}
+\definecolor{WhiteWarm}{HTML}{FCFDFD}
+
+\setbeamertemplate{navigation symbols}{}
+\setbeamertemplate{blocks}[rounded][shadow=false]
+\setbeamercolor{normal text}{fg=Ink,bg=WhiteWarm}
+\setbeamercolor{structure}{fg=Accent}
+\setbeamercolor{frametitle}{fg=Ink,bg=WhiteWarm}
+\setbeamercolor{title}{fg=WhiteWarm,bg=Ink}
+\setbeamercolor{block title}{fg=Ink,bg=AccentLight}
+\setbeamercolor{block body}{fg=Ink,bg=Soft}
+\setbeamercolor{alerted text}{fg=Terracotta}
+\setbeamerfont{title}{series=\bfseries,size=\fontsize{24}{28}\selectfont}
+\setbeamerfont{subtitle}{size=\fontsize{14}{17}\selectfont}
+\setbeamerfont{frametitle}{series=\bfseries,size=\fontsize{19}{22}\selectfont}
+\setbeamerfont{footline}{size=\scriptsize}
+\setbeamersize{text margin left=0.6cm,text margin right=0.6cm}
+
+\setbeamertemplate{itemize item}{\raisebox{0.15em}{\tikz\fill[Accent] (0,0) circle (0.08cm);}}
+\setbeamertemplate{itemize subitem}{\raisebox{0.12em}{\tikz\fill[Slate] (0,0) circle (0.06cm);}}
+
+\setbeamertemplate{frametitle}{
+  \vspace{0.48cm}
+  \begin{beamercolorbox}[wd=\paperwidth,sep=0pt,leftskip=0.6cm,rightskip=0.6cm]{frametitle}
+    \begin{tikzpicture}[remember picture,overlay]
+      \fill[Accent] (0,0.65) rectangle (\paperwidth,0.72);
+    \end{tikzpicture}
+    \vspace{0.05em}
+    \insertframetitle
+    \vspace{0.34cm}
+  \end{beamercolorbox}
+}
+
+\setbeamertemplate{footline}{
+  \leavevmode
+  \hbox{
+    \begin{beamercolorbox}[wd=.76\paperwidth,ht=4.6ex,dp=2.1ex,leftskip=0.6cm]{author in head/foot}
+      \color{GraphGray}\insertsectionhead
+    \end{beamercolorbox}
+    \begin{beamercolorbox}[wd=.24\paperwidth,ht=4.6ex,dp=2.1ex,rightskip=0.6cm plus1fil]{date in head/foot}
+      \hfill\color{GraphGray}\insertframenumber/\inserttotalframenumber
+    \end{beamercolorbox}
+  }
+}
+
+\newcommand{\metriccard}[3]{
+  \begin{beamercolorbox}[wd=\linewidth,sep=0.65em,rounded=true,shadow=false]{block body}
+    {\small\color{GraphGray}#1\par}
+    \vspace{0.1em}
+    {\bfseries\fontsize{16}{18}\selectfont #2\par}
+    \vspace{0.1em}
+    {\footnotesize #3\par}
+  \end{beamercolorbox}
+}
+
+\newcommand{\callout}[2]{
+  \begin{beamercolorbox}[wd=\linewidth,sep=0.6em,rounded=true,shadow=false]{block title}
+    {\bfseries #1}\par
+    \vspace{0.15em}
+    {\footnotesize #2}
+  \end{beamercolorbox}
+}
+
+\newcommand{\pendingbox}[2]{
+  \begin{beamercolorbox}[wd=\linewidth,sep=0.75em,rounded=true,shadow=false]{block body}
+    {\bfseries\color{Terracotta}#1}\par
+    \vspace{0.2em}
+    {\footnotesize #2}
+  \end{beamercolorbox}
+}
+
+\newcommand{\presentationimage}[2][]{%
+  \IfFileExists{#2}{%
+    \includegraphics[#1]{#2}%
+  }{%
+    \begin{beamercolorbox}[wd=\linewidth,ht=4.8cm,sep=0.7em,rounded=true,shadow=false]{block body}
+      \centering
+      {\bfseries Captura no disponible}\par
+      \vspace{0.2em}
+      {\scriptsize #2}
+    \end{beamercolorbox}%
+  }%
+}
+
+\title{Rescue Video Analyzer}
+\subtitle{Detección de personas en vídeo sobre una arquitectura MPI + CUDA}
+\author{Trabajo final de asignatura}
+\institute{Arquitecturas Paralelas}
+\date{23 de abril de 2026}
+
+\begin{document}
+
+\begin{frame}[plain]
+  \begin{tikzpicture}[remember picture,overlay]
+    \fill[Soft] (current page.south west) rectangle (current page.north east);
+    \fill[Accent!8] ([xshift=6.1cm,yshift=-2.7cm]current page.center) circle (1.05cm);
+    \fill[Slate!8] ([xshift=5.1cm,yshift=1.9cm]current page.center) circle (0.52cm);
+  \end{tikzpicture}
+
+  \vspace*{1.7cm}
+  \begin{columns}[T,totalwidth=\textwidth]
+    \begin{column}{0.68\textwidth}
+      {\usebeamerfont{title}\color{Ink}\inserttitle\par}
+      \vspace{0.32cm}
+      {\usebeamerfont{subtitle}\color{Slate}\insertsubtitle\par}
+      \vspace{0.42cm}
+      \begin{tikzpicture}
+        \fill[Accent] (0,0) rectangle (3.6,0.08);
+      \end{tikzpicture}
+      \vspace{0.24cm}
+      {\large\color{Slate}Trabajo final\par}
+      \vspace{0.34cm}
+      {\fontsize{12.5}{15}\selectfont\color{Ink}Diseño y evaluación de una solución paralela para análisis de vídeo con \textbf{MPI + CUDA}. \par}
+    \end{column}
+    \begin{column}{0.24\textwidth}
+      \vspace{0.15cm}
+      {\small\color{GraphGray}\textbf{Arquitecturas Paralelas}\par}
+      \vspace{0.16cm}
+      {\small\color{Ink}MPI + CUDA\par}
+      {\small\color{Ink}ONNX Runtime CUDA\par}
+      \vspace{0.14cm}
+      {\small\color{Ink}23 abril 2026\par}
+    \end{column}
+  \end{columns}
+
+  \vfill
+  {\small\color{Slate}\textbf{Idea fuerza:} la detección de personas se usa como vehículo para estudiar reparto del trabajo, comunicación mínima y límites reales de escalado.\par}
+  \vspace*{1.05cm}
+\end{frame}
+
+\section{Contexto}
+
+\begin{frame}{Problema y contexto}
+  \small
+  \begin{columns}[T,totalwidth=\textwidth]
+    \begin{column}{0.6\textwidth}
+      \begin{itemize}
+        \item El problema funcional es \textbf{detectar personas frame a frame} y producir una salida útil.
+        \item El problema de sistemas es \textbf{procesar vídeo con suficiente rendimiento} sin perder orden ni trazabilidad.
+        \item La solución debe aprovechar GPU, repartir trabajo entre procesos y medir qué parte realmente escala.
+      \end{itemize}
+
+      \vspace{0.2em}
+      \callout{Lectura del problema}{
+        El reto no es solo detectar personas, sino producir una salida ordenada, medible y reproducible sobre vídeo real.}
+    \end{column}
+    \begin{column}{0.35\textwidth}
+      \metriccard{Contexto}{Vídeo real}{Entrada compartida, procesamiento distribuido y salidas auditables.}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+\begin{frame}{Objetivo del trabajo}
+  \small
+  \callout{Objetivo del trabajo}{
+    Diseñar y evaluar una arquitectura paralela coherente para análisis de vídeo. El detector es el motor funcional; la aportación principal es cómo se organiza y ejecuta el pipeline.}
+
+  \vspace{0.35em}
+  \begin{columns}[T,totalwidth=\textwidth]
+    \begin{column}{0.32\textwidth}
+      \metriccard{Entrada real}{Vídeos completos}{No imágenes sueltas, sino secuencias con cientos de frames y salida final ordenada.}
+    \end{column}
+    \begin{column}{0.32\textwidth}
+      \metriccard{Restricción clave}{1 GPU física}{El escalado MPI convive con un recurso crítico compartido.}
+    \end{column}
+    \begin{column}{0.32\textwidth}
+      \metriccard{Resultado esperado}{Auditable}{Cada frame deja tiempos, conteos y trazas exportables.}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+\begin{frame}{Resumen ejecutivo}
+  \begin{columns}[T,totalwidth=\textwidth]
+    \begin{column}{0.48\textwidth}
+      \metriccard{Escalado observado}{\(\sim 1.30\times\)}{Speedup relativo frente a 1 worker CUDA en el mejor caso medido sobre una sola GPU física.}
+      \vspace{0.25em}
+      \metriccard{Cuello de botella}{70.4\% inferencia}{En el caso base, la detección domina claramente el tiempo medio por frame.}
+    \end{column}
+    \begin{column}{0.48\textwidth}
+      \metriccard{Decisión clave}{0 frames crudos por MPI}{El master reparte rangos de frames; los workers abren el vídeo por su cuenta.}
+      \vspace{0.25em}
+      \metriccard{Trazabilidad}{3 artefactos}{Vídeo anotado, CSV por frame y resumen JSON del experimento.}
+    \end{column}
+  \end{columns}
+
+  \vspace{0.35em}
+  \callout{Lectura principal}{
+    La arquitectura reduce comunicación, mide bien el trabajo y escala hasta que aparece el límite esperado: la contención sobre la única GPU disponible.}
+\end{frame}
+
+\section{Diseño}
+
+\begin{frame}{Arquitectura global del sistema}
+  \centering
+  \begin{tikzpicture}[
+      node distance=0.75cm and 0.75cm,
+      box/.style={rounded corners=8pt, draw=LineSoft, fill=Soft, minimum width=2.8cm, minimum height=1.05cm, align=center},
+      strong/.style={rounded corners=10pt, draw=none, fill=Ink, text=WhiteWarm, minimum width=2.8cm, minimum height=1.05cm, align=center},
+      worker/.style={rounded corners=9pt, draw=none, fill=DeepBlue!95, text=WhiteWarm, minimum width=2.55cm, minimum height=0.82cm, align=center},
+      arrow/.style={-{Latex[length=3mm]}, very thick, draw=Slate}
+    ]
+    \node[box] (video) {Vídeo compartido\\\texttt{dataset/*.mp4}};
+    \node[strong, right=0.95cm of video] (master) {Rank 0\\Master MPI};
+    \node[box, right=0.95cm of master, minimum width=3.1cm, minimum height=2.7cm] (pool) {};
+    \node[worker] (w1) at ([yshift=0.65cm]pool.center) {Worker MPI 1};
+    \node[worker] (w2) at (pool.center) {Worker MPI 2};
+    \node[worker] (w3) at ([yshift=-0.65cm]pool.center) {Worker MPI N};
+    \node[box, below=1.05cm of master, minimum width=4.7cm] (out) {Agregación ordenada + tracker visual\\\texttt{CSV + JSON + vídeo anotado}};
+
+    \draw[arrow] (video) -- (master);
+    \draw[arrow] (master) -- (pool);
+    \draw[arrow] (pool) -- (out);
+    \draw[arrow] (master) -- (out);
+  \end{tikzpicture}
+
+  \vspace{0.45em}
+  \begin{columns}[T,totalwidth=\textwidth]
+    \begin{column}{0.49\textwidth}
+      \callout{Qué reparte el master}{
+        No envía imágenes. Solo asigna \texttt{start\_frame} y \texttt{frame\_count}, y luego fusiona resultados ordenados.}
+    \end{column}
+    \begin{column}{0.49\textwidth}
+      \callout{Qué hace cada worker}{
+        Abre el vídeo, lee su lote, preprocesa en CUDA, ejecuta ONNX Runtime CUDA y devuelve un paquete compacto.}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+\begin{frame}{Descomposición y comunicación}
+  \small
+  \begin{columns}[T,totalwidth=\textwidth]
+    \begin{column}{0.48\textwidth}
+      \metriccard{Descomposición}{Paralelismo por datos}{El vídeo se divide en lotes de frames; la granularidad viene dada por \texttt{batch\_size}.}
+      \vspace{0.25em}
+      \metriccard{Comunicación}{Cabeceras, no payloads}{Se evita transferir imágenes BGR por MPI, reduciendo tráfico y presión sobre memoria.}
+    \end{column}
+    \begin{column}{0.48\textwidth}
+      \callout{Por qué importa esta elección}{
+        Si el master enviara un batch de 8 frames a \(1920\times1080\) en BGR, movería aproximadamente \textbf{47.5 MiB} por lote. Aquí solo se envían cabeceras y resultados compactos, así que la comunicación deja de ser el factor dominante.}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+\begin{frame}{Afinidad y planificación}
+  \small
+  \begin{columns}[T,totalwidth=\textwidth]
+    \begin{column}{0.48\textwidth}
+      \metriccard{Afinidad}{GPU por rango local}{Cada worker se liga automáticamente a una GPU visible distinta usando su \texttt{local worker rank}.}
+      \vspace{0.25em}
+      \metriccard{Planificación}{3 schedulers}{\texttt{dynamic}, \texttt{static-contiguous} y \texttt{static-round-robin}.}
+    \end{column}
+    \begin{column}{0.48\textwidth}
+      \callout{Lectura de diseño}{
+        La afinidad por GPU evita colisiones entre workers y permite comparar políticas de reparto sin mezclar el efecto del scheduler con el de la asignación de dispositivos.}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+\begin{frame}{Pipeline interno de un worker}
+  \centering
+  \begin{tikzpicture}[
+      stage/.style={rounded corners=8pt, draw=LineSoft, fill=Soft, minimum width=1.72cm, minimum height=0.95cm, align=center},
+      flow/.style={-{Latex[length=3mm]}, very thick, draw=Slate}
+    ]
+    \node[stage, fill=AccentLight] (read) {Leer lote};
+    \node[stage, right=0.22cm of read] (resize) {Resize};
+    \node[stage, right=0.22cm of resize, fill=AccentLight] (prep) {CUDA prep};
+    \node[stage, right=0.22cm of prep, fill=AccentLight] (det) {ORT CUDA};
+    \node[stage, right=0.22cm of det] (pack) {Resultados};
+    \draw[flow] (read) -- (resize);
+    \draw[flow] (resize) -- (prep);
+    \draw[flow] (prep) -- (det);
+    \draw[flow] (det) -- (pack);
+  \end{tikzpicture}
+
+  \vspace{0.75em}
+  \callout{Camino de datos eficiente}{
+    \texttt{preprocess\_frame\_cuda} genera en GPU el tensor de entrada ya normalizado; esa memoria entra directamente en ONNX Runtime CUDA, evitando copias adicionales innecesarias.}
+\end{frame}
+
+\begin{frame}{Coste base del pipeline}
+  \small
+  \begin{columns}[T,totalwidth=\textwidth]
+    \begin{column}{0.54\textwidth}
+      \begin{beamercolorbox}[wd=\linewidth,sep=0.65em,rounded=true,shadow=false]{block body}
+        {\bfseries Caso base \texttt{np=2, dynamic}}\par
+        \vspace{0.2em}
+        \scriptsize
+        \begin{tabular}{@{}lrr@{}}
+          \toprule
+          Etapa & ms & peso \\
+          \midrule
+          Lectura & 2.91 & 13.0\% \\
+          Preproceso & 3.69 & 16.5\% \\
+          Inferencia & 15.73 & 70.4\% \\
+          \bottomrule
+        \end{tabular}
+      \end{beamercolorbox}
+    \end{column}
+    \begin{column}{0.42\textwidth}
+      \metriccard{Tiempo total}{22.33 ms/frame}{Benchmark sobre \texttt{dataset/videoset.mp4} sin generar vídeo anotado.}
+      \vspace{0.3em}
+      \callout{Lectura directa}{
+        En el caso base, la inferencia domina claramente el tiempo medio por frame: mover datos y preprocesar cuesta bastante menos que ejecutar el detector.}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+\begin{frame}{Trazabilidad y salida}
+  \small
+  \begin{columns}[T,totalwidth=\textwidth]
+    \begin{column}{0.56\textwidth}
+      \begin{itemize}
+        \item \texttt{frame\_results.csv}: tiempos por etapa, worker, GPU, conteos y timestamp.
+        \item \texttt{summary.json}: métricas agregadas, balance de carga y tiempos globales.
+        \item \texttt{annotated\_people.mp4}: evidencia visual con cajas y overlay final.
+      \end{itemize}
+
+      \vspace{0.25em}
+      \callout{Idea paralela importante}{
+        La salida está fuera del tramo distribuido. Por eso el benchmark de escalado desactiva el vídeo anotado: así aísla scheduler y GPU.}
+    \end{column}
+    \begin{column}{0.38\textwidth}
+      \begin{beamercolorbox}[wd=\linewidth,sep=0.8em,rounded=true,shadow=false]{block body}
+        {\small\color{GraphGray}3 artefactos}\par
+        \vspace{0.15em}
+        {\bfseries\fontsize{18}{20}\selectfont CSV}\par
+        {\bfseries\fontsize{18}{20}\selectfont JSON}\par
+        {\bfseries\fontsize{18}{20}\selectfont Vídeo anotado}\par
+        \vspace{0.2em}
+        {\footnotesize La salida conserva tiempos por etapa, estado del worker y evidencia visual final.}
+      \end{beamercolorbox}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+\begin{frame}{Parte serial del pipeline}
+  \small
+  \begin{columns}[T,totalwidth=\textwidth]
+    \begin{column}{0.67\textwidth}
+      \begin{beamercolorbox}[wd=\linewidth,sep=0.7em,rounded=true,shadow=false]{block body}
+        {\bfseries Caso funcional con vídeo anotado activado}\par
+        \vspace{0.2em}
+        \begin{tikzpicture}
+          \fill[Accent] (0,0) rectangle (5.45,0.38);
+          \fill[Amber] (5.45,0) rectangle (7.25,0.38);
+          \draw[LineSoft, line width=0.4pt] (0,0) rectangle (7.25,0.38);
+        \end{tikzpicture}
+
+        \vspace{0.35em}
+        \small
+        \textbf{75.3\%} procesamiento distribuido (\(4986.5\) ms)\\
+        \textbf{24.7\%} escritura final y anotación (\(1637.6\) ms)
+      \end{beamercolorbox}
+    \end{column}
+    \begin{column}{0.29\textwidth}
+      \metriccard{Lectura correcta}{Separar compute y salida}{Si se mezcla anotación con escalado, el speedup queda sesgado por una parte serial ajena al scheduler.}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+\section{Evaluación}
+
+\begin{frame}{Diseño experimental}
+  \small
+  \begin{columns}[T,totalwidth=\textwidth]
+    \begin{column}{0.52\textwidth}
+      \begin{itemize}
+        \item \textbf{Hardware}: Intel Core i7-13700H (20 hilos lógicos) y NVIDIA GeForce RTX 4070 Laptop GPU de 8 GiB.
+        \item \textbf{Vídeo de benchmark}: \texttt{dataset/videoset.mp4}, \(341\) frames, \(640\times360\), 25 FPS.
+        \item \textbf{Configuración fija}: \texttt{batch\_size=8}, \texttt{models/yolo11s\_1088.onnx}, sin vídeo anotado.
+        \item \textbf{Lanzamientos}: \texttt{mpirun -np 2}, \texttt{-np 3} y \texttt{-np 4}, equivalentes a 1, 2 y 3 workers CUDA.
+      \end{itemize}
+    \end{column}
+    \begin{column}{0.44\textwidth}
+      \callout{Condición del experimento}{
+        La comparación solo es útil si se mantiene fijo el detector, el lote de frames y el scheduler. Así el efecto medido es el reparto del trabajo, no la variación del modelo.}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+\begin{frame}{Métricas evaluadas}
+  \small
+  \begin{columns}[T,totalwidth=\textwidth]
+    \begin{column}{0.55\textwidth}
+      \begin{beamercolorbox}[wd=\linewidth,sep=0.7em,rounded=true,shadow=false]{block body}
+        {\bfseries Magnitudes evaluadas}\par
+        \vspace{0.2em}
+        \footnotesize
+        \(\mathrm{T}_p\): tiempo total de pared\\
+        \(\mathrm{S}(p)=T_1/T_p\): speedup relativo\\
+        \(\mathrm{E}(p)=S(p)/p\): eficiencia paralela
+      \end{beamercolorbox}
+    \end{column}
+    \begin{column}{0.22\textwidth}
+      \metriccard{Balance}{\(\max/\text{media}\)}{Se usa la razón \texttt{max\_to\_mean\_ratio} exportada en \texttt{summary.json}.}
+    \end{column}
+  \end{columns}
+
+  \vspace{0.35em}
+  \callout{Lectura correcta}{
+    Para comparar speedup, el baseline \(T_1\) se toma manteniendo fija la política de planificación. Si cambia el scheduler, ya no estamos midiendo exactamente el mismo experimento.}
+  \end{frame}
+
+\begin{frame}{Escalado con más workers CUDA}
+  \begin{columns}[T,totalwidth=\textwidth]
+    \begin{column}{0.67\textwidth}
+      \begin{tikzpicture}
+        \begin{axis}[
+            width=\linewidth,
+            height=5.6cm,
+            ymin=6800,
+            ymax=10250,
+            xmin=1.85,
+            xmax=4.15,
+            xlabel={Tamaño del mundo MPI},
+            ylabel={Tiempo total de pared (ms)},
+            xtick={2,3,4},
+            grid=major,
+            grid style={LineSoft},
+            legend style={draw=none, fill=none, font=\scriptsize, at={(0.03,0.97)}, anchor=north west},
+            tick label style={font=\scriptsize},
+            label style={font=\small}
+          ]
+          \addplot[color=Accent, mark=*, line width=1.7pt] coordinates {
+            (2,9930.733) (3,7704.737) (4,7633.396)
+          };
+          \addplot[color=DeepBlue, mark=square*, line width=1.7pt] coordinates {
+            (2,9142.015) (3,7211.524) (4,7224.138)
+          };
+          \addplot[color=Terracotta, mark=triangle*, line width=1.7pt] coordinates {
+            (2,9058.309) (3,8237.438) (4,7521.725)
+          };
+          \legend{\texttt{dynamic}, \texttt{static-contiguous}, \texttt{static-round-robin}}
+        \end{axis}
+      \end{tikzpicture}
+    \end{column}
+    \begin{column}{0.29\textwidth}
+      \metriccard{Mejor caso}{7211.5 ms}{\texttt{np=3} con \texttt{static-contiguous}.}
+      \vspace{0.25em}
+      \metriccard{Reducción}{-21.1\%}{Respecto a \texttt{np=2} en el mismo scheduler.}
+    \end{column}
+  \end{columns}
+
+  \vspace{0.15em}
+  \callout{Lectura del gráfico}{
+    Pasar de 1 a 2 workers CUDA mejora el tiempo total; añadir un tercer worker ya casi no aporta beneficio porque la GPU compartida empieza a saturarse.}
+\end{frame}
+
+\begin{frame}{Contención de GPU y eficiencia paralela}
+  \begin{columns}[T,totalwidth=\textwidth]
+    \begin{column}{0.67\textwidth}
+      \begin{tikzpicture}
+        \begin{axis}[
+            width=\linewidth,
+            height=5.6cm,
+            ymin=12,
+            ymax=44,
+            xmin=1.85,
+            xmax=4.15,
+            xlabel={Tamaño del mundo MPI},
+            ylabel={\(\overline{\mathrm{detection\_ms}}\)},
+            xtick={2,3,4},
+            grid=major,
+            grid style={LineSoft},
+            legend style={draw=none, fill=none, font=\scriptsize, at={(0.03,0.97)}, anchor=north west},
+            tick label style={font=\scriptsize},
+            label style={font=\small}
+          ]
+          \addplot[color=Accent, mark=*, line width=1.7pt] coordinates {
+            (2,15.729) (3,29.949) (4,41.410)
+          };
+          \addplot[color=DeepBlue, mark=square*, line width=1.7pt] coordinates {
+            (2,16.161) (3,27.813) (4,40.122)
+          };
+          \addplot[color=Terracotta, mark=triangle*, line width=1.7pt] coordinates {
+            (2,16.111) (3,33.025) (4,41.001)
+          };
+          \legend{\texttt{dynamic}, \texttt{static-contiguous}, \texttt{static-round-robin}}
+        \end{axis}
+      \end{tikzpicture}
+    \end{column}
+    \begin{column}{0.29\textwidth}
+      \metriccard{Eficiencia a 2 workers}{0.63--0.64}{Ya aparece pérdida de eficiencia frente al ideal.}
+      \vspace{0.25em}
+      \metriccard{Eficiencia a 3 workers}{0.40--0.43}{La tercera hebra MPI añade poca mejora real.}
+    \end{column}
+  \end{columns}
+
+  \vspace{0.15em}
+  \callout{Conclusión}{
+    El límite no está en MPI, sino en que todos los workers compiten por la misma GPU física durante la inferencia.}
+\end{frame}
+
+\begin{frame}{Scheduler y balance de carga}
+  \begin{columns}[T,totalwidth=\textwidth]
+    \begin{column}{0.54\textwidth}
+      \centering
+      \scriptsize
+      \begin{tabular}{>{\bfseries}c c c c}
+        \toprule
+        \(\texttt{np}\) & \texttt{dyn} & \texttt{stat-contig} & \texttt{rr} \\
+        \midrule
+        3 & 168--173 (1.015) & 170--171 (1.003) & 168--173 (1.015) \\
+        4 & 112--117 (1.029) & 113--114 (1.003) & 112--117 (1.029) \\
+        \bottomrule
+      \end{tabular}
+
+      \vspace{0.55em}
+      {\scriptsize Rango de frames por worker; entre paréntesis, \texttt{max\_to\_mean\_ratio}.}
+    \end{column}
+    \begin{column}{0.42\textwidth}
+      \metriccard{Variabilidad del vídeo}{Baja}{En \texttt{videoset.mp4}, \(\sigma\) de personas/frame \(=2.59\).}
+      \vspace{0.25em}
+      \metriccard{Correlación}{0.087}{El número de personas por frame apenas explica la latencia de inferencia.}
+      \vspace{0.25em}
+      \callout{Interpretación}{
+        La carga por frame es homogénea; por eso aquí gana \texttt{static-contiguous}. El scheduler dinámico apenas recupera beneficio extra.}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+\begin{frame}{Resultado funcional del pipeline}
+  \begin{columns}[T,totalwidth=\textwidth]
+    \begin{column}{0.49\textwidth}
+      \presentationimage[width=\linewidth]{output/frame_001.png}
+    \end{column}
+    \begin{column}{0.49\textwidth}
+      \presentationimage[width=\linewidth]{output/frame_002.png}
+    \end{column}
+  \end{columns}
+
+  \vspace{0.5em}
+  \begin{columns}[T,totalwidth=\textwidth]
+    \begin{column}{0.48\textwidth}
+      \metriccard{Vídeo anotado}{Overlay útil}{Muestra personas actuales y acumulado real estimado mediante tracking visual.}
+    \end{column}
+    \begin{column}{0.48\textwidth}
+      \metriccard{Caso mostrado}{153 frames}{En \texttt{videoset2.mp4}: 29.86 personas/frame de media y 126 personas acumuladas.}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+\begin{frame}{Ejecución en granja de GPUs}
+  \small
+  \begin{columns}[T,totalwidth=\textwidth]
+    \begin{column}{0.52\textwidth}
+      \pendingbox{Sección pendiente de completar}{
+        A fecha \textbf{23 de abril de 2026} no se ha tenido acceso experimental a la granja de GPUs. Por tanto, esta parte debe quedar explícitamente marcada como \textbf{trabajo pendiente de validación}, no como resultado cerrado.}
+
+      \vspace{0.3em}
+      \callout{Lo ya preparado en el código}{
+        Afinidad automática por \texttt{local worker rank}, rutas compartidas para vídeo/modelo y reparto por workers MPI en nodos multi-GPU.}
+    \end{column}
+    \begin{column}{0.44\textwidth}
+      \begin{beamercolorbox}[wd=\linewidth,sep=0.7em,rounded=true,shadow=false]{block body}
+        {\bfseries Qué quedará por medir cuando haya acceso}\par
+        \vspace{0.15em}
+        \begin{itemize}
+          \item Escalado inter-nodo real.
+          \item Coste del filesystem compartido.
+          \item Afinidad GPU por nodo y hostfile MPI.
+          \item Throughput agregado y eficiencia global.
+          \item Sensibilidad a la contención de red y E/S.
+        \end{itemize}
+      \end{beamercolorbox}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+\section{Cierre}
+
+\begin{frame}{Limitaciones}
+  \begin{columns}[T,totalwidth=\textwidth]
+    \begin{column}{0.48\textwidth}
+      \metriccard{Límite principal}{GPU compartida}{La inferencia crece en latencia cuando aumenta el número de workers.}
+      \vspace{0.25em}
+      \metriccard{Cola serial}{Anotación y escritura}{La exportación del vídeo final introduce una fracción no paralelizable.}
+    \end{column}
+    \begin{column}{0.48\textwidth}
+      \metriccard{Tracker}{Visual-only}{Sirve para estabilizar la anotación, no para identidad robusta a largo plazo.}
+      \vspace{0.25em}
+      \metriccard{Siguiente paso natural}{Validación multi-GPU}{La evolución lógica es contrastar el mismo diseño en una granja real.}
+    \end{column}
+  \end{columns}
+
+  \vspace{0.3em}
+  \callout{Lectura de las limitaciones}{
+    El siguiente experimento relevante no es cambiar el detector, sino medir scheduler, afinidad y balance de carga cuando la GPU deja de ser un recurso único y pasa a distribuirse entre nodos.}
+\end{frame}
+
+\begin{frame}{Trabajo futuro}
+  \begin{columns}[T,totalwidth=\textwidth]
+    \begin{column}{0.48\textwidth}
+      \metriccard{Tracker}{Visual-only}{Sirve para estabilizar la anotación, no para identidad robusta a largo plazo.}
+      \vspace{0.25em}
+      \metriccard{Siguiente paso natural}{Validación multi-GPU}{La evolución lógica es contrastar el mismo diseño en una granja real.}
+    \end{column}
+    \begin{column}{0.48\textwidth}
+      \callout{Qué medir después}{
+        Cuando haya acceso a la granja, el foco debe pasar a escalado inter-nodo, afinidad real por GPU, impacto del filesystem compartido y sensibilidad a la contención de red.}
+    \end{column}
+  \end{columns}
+\end{frame}
+
+\begin{frame}{Conclusiones}
+  \small
+  \begin{itemize}
+    \item La solución resuelve el problema funcional y, además, deja un pipeline bien medido y reproducible.
+    \item En Arquitecturas Paralelas, lo relevante aquí es \textbf{descomposición}, \textbf{comunicación}, \textbf{scheduler MPI} y \textbf{contención sobre GPU}.
+    \item El speedup existe al pasar de 1 a 2 workers CUDA, pero no escala linealmente sobre una sola GPU física.
+    \item En el entorno medido, \texttt{static-contiguous} rinde mejor porque la carga por frame es bastante homogénea.
+    \item La validación en granja de GPUs queda abierta como siguiente fase experimental.
+  \end{itemize}
+
+  \vspace{0.35em}
+  \begin{beamercolorbox}[wd=\linewidth,sep=0.7em,rounded=true,shadow=false]{block title}
+    {\bfseries Mensaje final}\par
+    \vspace{0.15em}
+    El trabajo demuestra que la calidad de una solución paralela no depende solo de ``usar GPU'', sino de \textbf{cómo se organiza el sistema, qué se mide y dónde aparecen sus límites reales}.
+  \end{beamercolorbox}
+\end{frame}
+
+\end{document}

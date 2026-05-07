@@ -5,9 +5,9 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-INPUT_VIDEO="${1:-videoset.mp4}"
+INPUT_VIDEO="${1:-dataset/videoset.mp4}"
 OUTPUT_ROOT="${2:-parallel_benchmarks}"
-MODEL_PATH="${MODEL_PATH:-models/yolo11s.onnx}"
+MODEL_PATH="${MODEL_PATH:-models/yolo11s_1088.onnx}"
 BATCH_SIZE="${BATCH_SIZE:-8}"
 MPI_WORLD_SIZES="${MPI_WORLD_SIZES:-2 3 4}"
 SCHEDULERS="${SCHEDULERS:-dynamic static-contiguous static-round-robin}"
@@ -27,7 +27,7 @@ for world_size in $MPI_WORLD_SIZES; do
         --input "$INPUT_VIDEO" \
         --output-dir "$run_output_dir" \
         --batch-size "$BATCH_SIZE" \
-        --resize-width 640 \
+        --resize-width 1088 \
         --model "$MODEL_PATH" \
         --scheduler "$scheduler" \
         --no-annotated-video \

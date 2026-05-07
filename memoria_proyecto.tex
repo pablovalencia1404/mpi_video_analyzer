@@ -1,0 +1,296 @@
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[spanish]{babel}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{lmodern}
+\usepackage{geometry}
+\usepackage{setspace}
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{hyperref}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage{amsmath}
+\usepackage{siunitx}
+\usepackage{listings}
+\usepackage{enumitem}
+
+\geometry{margin=2.5cm}
+\setstretch{1.12}
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue,
+  urlcolor=blue,
+  citecolor=blue,
+  pdftitle={Memoria del proyecto Rescue Video Analyzer},
+  pdfauthor={Proyecto de Arquitectura Paralela}
+}
+
+\lstdefinelanguage{bash}{
+  morekeywords={cmake,mpirun,python,wget,curl,sudo,apt,get,install,export},
+  sensitive=true,
+  morecomment=[l]{\#},
+  morestring=[b]"
+}
+
+\title{Memoria t\'ecnica completa\\Rescue Video Analyzer}
+\author{Arquitectura de Computadores y Programaci\'on Paralela}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+\tableofcontents
+\newpage
+
+\section{Resumen ejecutivo}
+Este proyecto implementa un analizador de video de personas sobre una arquitectura distribuida y \textbf{altamente heterog\'enea} que combina \textbf{MPI}, \textbf{CUDA (NVIDIA)} y \textbf{OpenCL (Intel/AMD)}. El sistema usa un esquema maestro-trabajadores donde el \emph{rank} 0 lee el video, serializa lotes de frames y los env\'ia por MPI; los \emph{workers} reciben esos frames, los preprocesan nativamente en el hardware gr\'afico disponible y ejecutan inferencia con YOLO11 aprovechando la m\'axima capacidad de c\'omputo del sistema, combinando GPUs dedicadas e integradas de forma simult\'anea.
+
+Los resultados se consolidan en tres salidas:
+\begin{itemize}[leftmargin=*]
+  \item video anotado con cajas y overlay informativo,
+  \item CSV por frame con m\'etricas y conteos,
+  \item JSON resumen con estad\'isticas globales y balance de carga.
+\end{itemize}
+
+Como mejora funcional reciente, el video anotado incluye:
+\begin{itemize}[leftmargin=*]
+  \item \textbf{Personas actuales}: personas detectadas en el frame actual.
+  \item \textbf{Acumulado real}: estimaci\'on de personas \`unicas a partir de IDs de tracking visual.
+\end{itemize}
+
+\section{Objetivos del proyecto}
+\begin{enumerate}[leftmargin=*]
+  \item Dise\~nar un pipeline de procesamiento distribuido de video con MPI.
+  \item Acelerar preprocesado e inferencia con GPU CUDA.
+  \item Generar m\'etricas reproducibles de rendimiento por etapa.
+  \item Mantener trazabilidad de resultados a nivel de frame y a nivel global.
+  \item Producir evidencia visual del an\'alisis mediante video anotado.
+\end{enumerate}
+
+\section{Alcance y restricciones}
+\subsection{Alcance}
+\begin{itemize}[leftmargin=*]
+  \item Detecci\'on de personas en video con modelos YOLO11 ONNX.
+  \item Orquestaci\'on de trabajo con MPI permitiendo ejecuci\'on multiproceso.
+  \item Ejecuci\'on polim\'orfica escalable horizontalmente, utilizando m\'ultiples tarjetas gr\'aficas f\'isicas de distintos fabricantes (NVIDIA, Intel, AMD) en paralelo.
+\end{itemize}
+
+\subsection{Restricciones principales}
+\begin{itemize}[leftmargin=*]
+  \item El tracker se usa para estabilizar la visualizaci\'on, no para garantizar una identidad robusta a trav\'es de oclusiones prolongadas.
+  \item El conteo acumulado es una estimaci\'on basada en IDs de tracking visual y puede variar en escenarios de aglomeraci\'on densa.
+  \item Requiere la instalaci\'on de controladores OpenCL (ICD) en el sistema operativo host para reconocer las GPUs integradas de Intel/AMD.
+\end{itemize}
+
+\subsection{Entorno exacto (probado)}
+\begin{itemize}[leftmargin=*]
+  \item El binario busca bibliotecas CUDA/cuDNN dentro de una \path{.venv} en rutas de Python 3.12 o 3.11, y pre-carga librer\'ias cu13/cuDNN antes de crear la sesi\'on ORT.
+  \item Si existe \path{/usr/lib/wsl/lib}, se agrega autom\'aticamente al \texttt{LD\_LIBRARY\_PATH} para soporte WSL.
+  \item ONNX Runtime CUDA se carga din\'amicamente desde la \path{.venv}; si es necesario se puede forzar la librer\'ia con \texttt{RESCUE\_ORT\_LIBRARY}.
+  \item La compilaci\'on CUDA usa \texttt{CMAKE\_CUDA\_ARCHITECTURES=89} por defecto (se puede sobrescribir al invocar CMake).
+\end{itemize}
+
+\section{Arquitectura del sistema}
+\subsection{Vista general}
+\begin{enumerate}[leftmargin=*]
+  \item \textbf{Master (rank 0)}: genera lotes de trabajo y agrega resultados.
+  \item \textbf{Workers (rank >= 1)}: reciben lotes de frames por MPI, ejecutan preprocesado CUDA e inferencia.
+  \item \textbf{Salida}: escritura de CSV, JSON y video anotado ordenado por frame.
+\end{enumerate}
+
+\subsection{Planificaci\'on MPI}
+Modos soportados:
+\begin{itemize}[leftmargin=*]
+  \item \texttt{dynamic}
+  \item \texttt{static-contiguous}
+  \item \texttt{static-round-robin}
+\end{itemize}
+
+El modo din\'amico mejora adaptaci\'on a variabilidad por frame. Los modos est\'aticos permiten comparar equilibrio de carga frente a una distribuci\'on fija.
+
+\section{Dise\~no de m\'odulos}
+\subsection{Entrada y configuraci\'on}
+\begin{itemize}[leftmargin=*]
+  \item \path{src/main.cpp}: parsing de argumentos, validaci\'on y bootstrap de entorno para bibliotecas CUDA/cuDNN.
+\end{itemize}
+
+\subsection{Orquestaci\'on distribuida}
+\begin{itemize}[leftmargin=*]
+  \item \path{src/mpi_runtime.cpp}: distribuci\'on de lotes, env\'io de cabeceras MPI, recepci\'on de resultados y merge ordenado.
+\end{itemize}
+
+\subsection{Lectura de video}
+\begin{itemize}[leftmargin=*]
+  \item \path{src/video_io.cpp}: lectura por lotes desde frame inicial arbitrario en el master para alimentar a los workers.
+\end{itemize}
+
+\subsection{Preprocesado e inferencia (Polimorfismo)}
+Para dar soporte a la heterogeneidad del hardware, la l\'ogica de detecci\'on est\'a abstra\'ida mediante la interfaz \texttt{IPeopleDetector}.
+\begin{itemize}[leftmargin=*]
+  \item \textbf{Backend CUDA}:
+  \begin{itemize}[leftmargin=*]
+    \item \path{src/gpu_preprocess.cu}: kernels personalizados en CUDA C++ para letterboxing y filtros Sobel ultrarr\'apidos.
+    \item \path{src/yolo_detector_cuda.cpp}: inferencia de m\'aximo rendimiento usando la API C++ de ONNX Runtime con el proveedor de ejecuci\'on CUDA.
+  \end{itemize}
+  \item \textbf{Backend OpenCL}:
+  \begin{itemize}[leftmargin=*]
+    \item \path{src/gpu_preprocess_opencl.cpp}: preprocesado hardware-agnostic basado en la abstracci\'on \texttt{cv::UMat} de OpenCV, manteniendo la memoria en la VRAM de la gr\'afica.
+    \item \path{src/yolo_detector_opencl.cpp}: inferencia compatible con GPUs integradas Intel/AMD apoy\'andose en el m\'odulo \texttt{dnn} nativo de OpenCV (\texttt{DNN\_TARGET\_OPENCL}).
+  \end{itemize}
+\end{itemize}
+
+\subsection{Postproceso y salida}
+\begin{itemize}[leftmargin=*]
+  \item \path{src/tracker.cpp}: suavizado de cajas para anotaci\'on visual.
+  \item \path{src/output_writer.cpp}: CSV, JSON y video final anotado.
+\end{itemize}
+
+\section{Soporte H\'ibrido y Optimizaci\'on OpenCL}
+Uno de los principales hitos t\'ecnicos de este analizador es su capacidad para orquestar recursos de c\'omputo dispares.
+
+\subsection{Despacho Din\'amico Inteligente}
+En \path{src/main.cpp} y \path{src/mpi_runtime.cpp}, el sistema inspecciona autom\'aticamente la topolog\'ia del nodo. Si el usuario utiliza el modo \texttt{--gpu-backend auto}, el programa:
+\begin{enumerate}
+    \item Cuenta las GPUs de NVIDIA detectables (ej. 1 GPU RTX).
+    \item Asigna prioritariamente los primeros \emph{workers} de MPI a estas GPUs v\'ia CUDA.
+    \item Cualquier \emph{worker} extra instanciado (ej. \emph{Rank 2}) detecta que las GPUs dedicadas est\'an saturadas y hace un \emph{fallback} elegante hacia el backend de OpenCL, adue\~n\'andose de la GPU integrada.
+\end{enumerate}
+
+\subsection{Evasi\'on de Cuellos de Botella de Memoria (UMat)}
+Durante la implementaci\'on inicial de OpenCL, se observ\'o un estancamiento en la GPU integrada (con usos en torno al 12\%). El an\'alisis revel\'o que la funci\'on \texttt{blobFromImage} descargaba s\'incronamente los tensores desde la VRAM a la RAM de la CPU (como un \texttt{cv::Mat}), para que acto seguido la red neuronal volviera a subirlos a la GPU. 
+
+La soluci\'on consisti\'o en forzar la salida de dicha funci\'on hacia un objeto \texttt{cv::UMat} unificado. Al mantener el tensor confinado en la memoria de v\'ideo de principio a fin, el tiempo de inferencia de la integrada se redujo a una tercera parte, estabilizando el flujo as\'incrono.
+
+\section{Planificaci\'on en Entornos Asim\'etricos}
+Para sacar verdadero partido a una GPU dedicada (NVIDIA RTX) junto con una GPU integrada simult\'aneamente, el planificador \texttt{--scheduler dynamic} result\'o ser matem\'aticamente superior.
+Mientras la NVIDIA procesa un lote en 20 ms, la integrada requiere unos 200 ms. Si se utilizara un planificador \texttt{static-round-robin} estricto, la tarjeta r\'apida terminar\'ia su mitad de lotes del v\'ideo de forma casi instant\'anea y esperar\'ia ociosa a que la lenta terminase. El modo din\'amico soluciona esto alimentando vorazmente a la GPU r\'apida y dejando que la integrada procese tranquilamente de fondo, logrando un ratio natural de procesamiento de 10 a 1 sin bloqueos por sincronizaci\'on ineficiente.
+
+\section{Formato de datos y trazabilidad}
+\subsection{CSV por frame}
+Columnas principales:
+\begin{itemize}[leftmargin=*]
+  \item \texttt{frame\_index, worker\_rank, timestamp\_ms}
+  \item \texttt{people\_count}
+  \item \texttt{read\_ms, preprocess\_ms, detection\_ms, processing\_ms}
+  \item \texttt{people\_count} se limita al n\'umero de cajas transmitidas (tope \texttt{kMaxDetectionsPerFrame}).
+\end{itemize}
+
+\subsection{Resumen JSON}
+Incluye metadatos de video, m\'etricas agregadas, balance de carga por worker y tiempos globales de proceso.
+
+\section{Repaso t\'ecnico del estado actual}
+\subsection{Fortalezas}
+\begin{itemize}[leftmargin=*]
+  \item Arquitectura MPI coherente con reparto por lotes serializados desde el master, sin relectura del video en cada worker.
+  \item Separaci\'on clara de tiempos por etapa, \`util para an\'alisis de cuellos de botella.
+  \item Salida reproducible y auditable en CSV + JSON + video.
+  \item Backend de inferencia alineado con GPU para el caso principal.
+\end{itemize}
+
+\subsection{Aspectos a vigilar}
+\begin{itemize}[leftmargin=*]
+  \item La contenci\'on de una GPU compartida puede limitar escalado al aumentar workers.
+  \item El tracker no debe interpretarse como m\'odulo de tracking de identidades persistentes.
+  \item El acumulado visual representa una estimaci\'on de personas \`unicas basada en IDs de tracking.
+\end{itemize}
+
+\section{Mejora implementada: contador actual y acumulado}
+\subsection{Motivaci\'on}
+Se solicit\'o mostrar en el video procesado:
+\begin{enumerate}[leftmargin=*]
+  \item cu\'antas personas hay en el frame actual,
+  \item y cu\'al es el conteo acumulado hasta ese instante.
+\end{enumerate}
+
+\subsection{Implementaci\'on}
+En la etapa de anotaci\'on de \texttt{output\_writer}:
+\begin{itemize}[leftmargin=*]
+  \item se reconstruyen tracks visuales sobre las detecciones ordenadas por frame,
+  \item se obtiene \texttt{current\_people} como el n\'umero de tracks visibles,
+  \item se mantiene un conjunto de IDs ya vistos para estimar \texttt{cumulative\_people},
+  \item se dibuja un overlay en la esquina superior izquierda con ambos valores,
+  \item se mantiene el dibujo de cajas de detecci\'on como antes.
+\end{itemize}
+
+Se a\~nadieron adem\'as los campos \texttt{accumulated\_people} y \texttt{accumulated\_detections} al \texttt{summary.json} para distinguir entre estimaci\'on de personas \`unicas y suma temporal de detecciones.
+
+\section{Entorno de desarrollo y compilaci\'on}
+\subsection{Dependencias}
+\begin{itemize}[leftmargin=*]
+  \item CMake
+  \item OpenCV 4 (core, imgproc, videoio, dnn)
+  \item OpenMPI
+  \item OpenCL ICD (\texttt{intel-opencl-icd}, \texttt{mesa-opencl-icd})
+  \item CUDA Toolkit (Opcional, manejado por CMake)
+  \item ONNX Runtime GPU en entorno Python local (Opcional)
+\end{itemize}
+
+\subsection{Compilaci\'on}
+El sistema de construcci\'on en \texttt{CMakeLists.txt} ha sido modularizado. Si el sistema carece de aceleradores NVIDIA, la opci\'on \texttt{RESCUE\_ENABLE\_CUDA=OFF} permite compilar la aplicaci\'on estrictamente para procesadores e integradas OpenCL, sin requerir el SDK de CUDA.
+\begin{lstlisting}[language=bash]
+cmake -S . -B build -DRESCUE_ENABLE_CUDA=ON
+cmake --build build -j
+\end{lstlisting}
+
+\subsection{Ejecuci\'on recomendada (Ejemplo H\'ibrido)}
+Para aprovechar simult\'aneamente una GPU NVIDIA y una GPU Integrada Intel, deben lanzarse 3 procesos (1 Master + 2 Workers) con el balanceador auto-configurado:
+\begin{lstlisting}[language=bash]
+LD_LIBRARY_PATH=/usr/lib/wsl/lib:${LD_LIBRARY_PATH:-} \
+mpiexec -n 3 ./build/rescue_video_analyzer \
+  --input dataset/videoset2.mp4 \
+  --output-dir output \
+  --batch-size 8 \
+  --scheduler dynamic \
+  --gpu-backend auto
+\end{lstlisting}
+
+\section{Resultados y lectura de m\'etricas}
+\subsection{M\'etricas clave}
+\begin{itemize}[leftmargin=*]
+  \item tiempo medio de lectura por frame,
+  \item tiempo medio de preprocesado,
+  \item tiempo medio de detecci\'on,
+  \item tiempo total por frame,
+  \item personas promedio por frame y m\'aximo observado,
+  \item acumulado total del video.
+\end{itemize}
+
+\subsection{Interpretaci\'on}
+\begin{itemize}[leftmargin=*]
+  \item Si \texttt{detection\_ms} domina, la inferencia es cuello de botella.
+  \item Si \texttt{read\_ms} sube con muchos workers, puede haber contenci\'on de E/S.
+  \item Si el balance de carga muestra \texttt{max\_to\_mean\_ratio} alto, conviene probar planificador din\'amico o tama\~no de lote distinto.
+\end{itemize}
+
+\section{Validaci\'on funcional recomendada}
+\begin{enumerate}[leftmargin=*]
+  \item Ejecutar un video corto y verificar que se genera \texttt{annotated\_people.mp4} o \texttt{.avi}.
+  \item Confirmar que el overlay muestra ambos contadores y crece el acumulado.
+  \item Comparar \texttt{accumulated\_people} en JSON con el comportamiento visual del tracker y usar \texttt{accumulated\_detections} si quieres la suma temporal de \texttt{people\_count}.
+  \item Revisar logs de workers para backend y latencias por lote.
+\end{enumerate}
+
+\section{Gu\'ia de compilaci\'on de esta memoria}
+Si hay distribuci\'on LaTeX instalada:
+\begin{lstlisting}[language=bash]
+pdflatex memoria_proyecto.tex
+pdflatex memoria_proyecto.tex
+\end{lstlisting}
+
+Se recomienda doble compilaci\'on para actualizar tabla de contenidos y referencias.
+
+\section{Trabajo futuro}
+\begin{itemize}[leftmargin=*]
+  \item Conteo acumulado por identidades \`unicas (tracking robusto por ID).
+  \item Evaluaci\'on sistem\'atica de sensibilidad a umbrales de confianza y NMS.
+  \item Exportaci\'on de reportes autom\'aticos (tablas y gr\'aficas) desde los CSV.
+  \item Soporte multi-GPU real para escalado horizontal de workers.
+\end{itemize}
+
+\section{Conclusiones}
+El proyecto presenta una base t\'ecnica s\'olida para an\'alisis de personas en video con procesamiento distribuido y aceleraci\'on GPU. La mejora implementada del overlay de conteo actual y acumulado aumenta el valor explicativo del video final y la trazabilidad del resultado. La memoria deja documentados alcance, arquitectura, flujo, m\'etricas y l\'ineas de evoluci\'on para siguientes iteraciones.
+
+\end{document}

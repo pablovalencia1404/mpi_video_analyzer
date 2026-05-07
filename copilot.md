@@ -94,38 +94,40 @@ Por ejemplo, un método tipo:
 
 * `read_batch_from(start_frame, batch_size, ...)`
 
+El maestro puede usarlo para leer y serializar lotes; los workers no deberían abrir el vídeo.
+
 ### Qué conseguir
 
 Pasar de esta arquitectura:
 
-* maestro lee y envía imágenes
+* maestro lee y serializa lotes de frames
 
 a esta:
 
-* maestro reparte índices
-* workers leen y procesan
+* maestro reparte lotes de frames
+* workers reciben y procesan
 
 Eso mejora mucho la coherencia arquitectónica.
 
-## 4. Controla la competencia por la única GPU
+## 4. Controla la competencia por la GPU compartida
 
-Tienes una sola RTX 4070 Laptop. Si lanzas varios workers MPI usando todos CUDA al mismo tiempo, puedes introducir mucha contención.
+Tienes una sola RTX 4070 Laptop. Si lanzas varios workers MPI usando todos CUDA al mismo tiempo, varios procesos pueden compartir la misma GPU y aumentar la contención.
 
 ### Qué cambiar
 
 En la ejecución real del proyecto:
 
-* usa **1 maestro + 1 worker GPU** como configuración base oficial;
-* como mucho prueba **1 maestro + 2 workers** si quieres analizar contención;
+* usa **1 maestro + 1 worker** como configuración base oficial;
+* si pruebas más workers, hazlo para analizar contención;
 * no vendas muchos workers como escalado real si comparten la misma GPU.
 
 ### Qué añadir
 
 En logs y memoria, deja claro:
 
-* cuántos ranks usan CUDA;
+* cuántos workers hay;
 * si la GPU es compartida entre varios procesos;
-* que el sistema es de **nodo único con memoria distribuida lógica**.
+* que el sistema reparte trabajo por núcleos de CPU, no por GPUs.
 
 ## 5. Haz que el tracking forme parte del resultado, no solo del vídeo anotado
 
@@ -206,7 +208,7 @@ Que `people_count` tenga una definición técnica clara.
 
 ## 8. Reduce el acoplamiento del bootstrap de librerías
 
-Tu `main.cpp` hace bastante trabajo de entorno con `LD_LIBRARY_PATH` y `execv`.
+Tu `main.cpp` hace bastante trabajo de entorno con `LD_LIBRARY_PATH` y `execv`, y ahora también añade `/usr/lib/wsl/lib` cuando existe para que CUDA arranque sin pasos manuales en WSL.
 
 ### Qué cambiar
 

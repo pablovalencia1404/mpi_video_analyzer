@@ -12,6 +12,7 @@
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 #include <opencv2/imgproc.hpp>
@@ -48,6 +49,54 @@ int max_people(const std::vector<FramePacket>& packets) {
         ->result.people_count;
 }
 
+int tracking_missing_frames(const VideoMetadata& metadata) {
+    if (metadata.fps <= 0.0) {
+        return 32;
+    }
+
+    return std::clamp(static_cast<int>(std::lround(metadata.fps * 2.0)), 24, 72);
+}
+
+SimpleTracker build_visual_tracker(const VideoMetadata& metadata) {
+    return SimpleTracker(
+        0.18f,
+        tracking_missing_frames(metadata),
+        0.55f,
+        1.35f,
+        0.35f,
+        0.40f);
+}
+
+std::int64_t accumulated_detections(const std::vector<FramePacket>& packets) {
+    return std::accumulate(
+        packets.begin(),
+        packets.end(),
+        std::int64_t{0},
+        [](std::int64_t acc, const FramePacket& packet) {
+            return acc + static_cast<std::int64_t>(packet.result.people_count);
+        });
+}
+
+std::int64_t accumulated_unique_people(const std::vector<FramePacket>& ordered_packets, const VideoMetadata& metadata) {
+    SimpleTracker tracker = build_visual_tracker(metadata);
+    std::unordered_set<int> seen_track_ids;
+
+    for (const auto& packet : ordered_packets) {
+        std::vector<DetectionBox> detections;
+        detections.reserve(static_cast<std::size_t>(packet.detection_count));
+        for (int detection_index = 0; detection_index < packet.detection_count; ++detection_index) {
+            detections.push_back(packet.detections[static_cast<std::size_t>(detection_index)]);
+        }
+
+        const auto tracked_boxes = tracker.update(detections);
+        for (const auto& track : tracked_boxes) {
+            seen_track_ids.insert(track.track_id);
+        }
+    }
+
+    return static_cast<std::int64_t>(seen_track_ids.size());
+}
+
 template <typename Fn>
 double average_metric(const std::vector<FramePacket>& packets, Fn metric) {
     if (packets.empty()) {
@@ -72,6 +121,7 @@ std::size_t unique_worker_count(const std::vector<FramePacket>& packets) {
 
 struct WorkerAggregate {
     int worker_rank = 0;
+    int gpu_device_id = -1;
     int frame_count = 0;
     int people_total = 0;
     int first_frame = std::numeric_limits<int>::max();
@@ -87,6 +137,9 @@ std::map<int, WorkerAggregate> build_worker_aggregates(const std::vector<FramePa
     for (const auto& packet : packets) {
         auto& aggregate = aggregates[packet.result.worker_rank];
         aggregate.worker_rank = packet.result.worker_rank;
+        if (aggregate.gpu_device_id < 0) {
+            aggregate.gpu_device_id = packet.result.gpu_device_id;
+        }
         ++aggregate.frame_count;
         aggregate.people_total += packet.result.people_count;
         aggregate.first_frame = std::min(aggregate.first_frame, static_cast<int>(packet.result.frame_index));
@@ -125,6 +178,7 @@ void write_worker_stats_json(
 
         json << "    {\n";
         json << "      \"worker_rank\": " << aggregate.worker_rank << ",\n";
+        json << "      \"gpu_device_id\": " << aggregate.gpu_device_id << ",\n";
         json << "      \"frames\": " << aggregate.frame_count << ",\n";
         json << "      \"frame_share\": " << frame_share << ",\n";
         json << "      \"people_total\": " << aggregate.people_total << ",\n";
@@ -178,11 +232,10 @@ std::string write_annotated_video(
     const std::string& output_dir,
     const std::string& input_path,
     const VideoMetadata& metadata,
+    const cv::Size& processing_size,
     const std::map<int, FramePacket>& packets_by_frame) {
     const double fps = metadata.fps > 0.0 ? metadata.fps : 30.0;
-    const cv::Size frame_size(
-        metadata.width > 0 ? metadata.width : 0,
-        metadata.height > 0 ? metadata.height : 0);
+    const cv::Size frame_size = processing_size;
 
     const std::vector<std::pair<std::string, std::string>> writer_options = {
         {"mp4v", ".mp4"},
@@ -203,27 +256,44 @@ std::string write_annotated_video(
             continue;
         }
 
-        SimpleTracker tracker;
+        SimpleTracker tracker = build_visual_tracker(metadata);
+        std::unordered_set<int> seen_track_ids;
         capture.set(cv::CAP_PROP_POS_FRAMES, 0);
 
         cv::Mat frame;
         int frame_index = 0;
+        std::int64_t cumulative_unique_people = 0;
         while (capture.read(frame)) {
+            cv::Mat annotated_frame;
+            if (frame.size() != frame_size) {
+                cv::resize(frame, annotated_frame, frame_size, 0.0, 0.0, cv::INTER_LINEAR);
+            } else {
+                annotated_frame = frame;
+            }
+
+            int current_people = 0;
             const auto packet_it = packets_by_frame.find(frame_index);
-            if (packet_it != packets_by_frame.end() && packet_it->second.detection_count > 0) {
-                std::vector<DetectionBox> detections;
+            std::vector<DetectionBox> detections;
+            if (packet_it != packets_by_frame.end()) {
                 detections.reserve(static_cast<std::size_t>(packet_it->second.detection_count));
                 for (int detection_index = 0; detection_index < packet_it->second.detection_count; ++detection_index) {
                     detections.push_back(packet_it->second.detections[static_cast<std::size_t>(detection_index)]);
                 }
+            }
 
-                const auto tracked_boxes = tracker.update(detections);
-                for (const auto& track : tracked_boxes) {
+            const auto tracked_boxes = tracker.update(detections);
+            current_people = static_cast<int>(tracked_boxes.size());
+
+            for (const auto& track : tracked_boxes) {
+                if (seen_track_ids.insert(track.track_id).second) {
+                    ++cumulative_unique_people;
+                }
+
                     const cv::Rect2f clipped = track.box & cv::Rect2f(
                         0.0f,
                         0.0f,
-                        static_cast<float>(frame.cols),
-                        static_cast<float>(frame.rows));
+                        static_cast<float>(annotated_frame.cols),
+                        static_cast<float>(annotated_frame.rows));
                     if (clipped.width <= 0.0f || clipped.height <= 0.0f) {
                         continue;
                     }
@@ -235,11 +305,34 @@ std::string write_annotated_video(
                         static_cast<int>(std::round(clipped.x + clipped.width)),
                         static_cast<int>(std::round(clipped.y + clipped.height)));
 
-                    cv::rectangle(frame, top_left, bottom_right, cv::Scalar(0, 255, 0), 2);
-                }
+                    cv::rectangle(annotated_frame, top_left, bottom_right, cv::Scalar(0, 255, 0), 2);
             }
 
-            writer.write(frame);
+            const std::string overlay_text =
+                "Personas actuales: " + std::to_string(current_people) +
+                " | Acumulado real: " + std::to_string(cumulative_unique_people);
+            int baseline = 0;
+            const double font_scale = 0.8;
+            const int thickness = 2;
+            const cv::Size text_size =
+                cv::getTextSize(overlay_text, cv::FONT_HERSHEY_SIMPLEX, font_scale, thickness, &baseline);
+            const cv::Point text_origin(16, 24 + text_size.height);
+            const cv::Point box_top_left(8, 8);
+            const cv::Point box_bottom_right(
+                std::min(annotated_frame.cols - 8, box_top_left.x + text_size.width + 16),
+                std::min(annotated_frame.rows - 8, box_top_left.y + text_size.height + baseline + 20));
+            cv::rectangle(annotated_frame, box_top_left, box_bottom_right, cv::Scalar(20, 20, 20), cv::FILLED);
+            cv::putText(
+                annotated_frame,
+                overlay_text,
+                text_origin,
+                cv::FONT_HERSHEY_SIMPLEX,
+                font_scale,
+                cv::Scalar(0, 255, 255),
+                thickness,
+                cv::LINE_AA);
+
+            writer.write(annotated_frame);
             ++frame_index;
         }
 
@@ -267,12 +360,19 @@ void write_outputs(
         packets_by_frame.emplace(packet.result.frame_index, packet);
     }
     const auto worker_aggregates = build_worker_aggregates(ordered_packets);
+    const std::int64_t unique_people_total = accumulated_unique_people(ordered_packets, metadata);
+    const std::int64_t detection_accumulated = accumulated_detections(ordered_packets);
 
     const auto csv_path = std::filesystem::path(output_dir) / "frame_results.csv";
     const auto json_path = std::filesystem::path(output_dir) / "summary.json";
     std::string annotated_video_path;
     if (metrics.annotated_video_enabled) {
-        annotated_video_path = write_annotated_video(output_dir, input_path, metadata, packets_by_frame);
+        annotated_video_path = write_annotated_video(
+            output_dir,
+            input_path,
+            metadata,
+            cv::Size(metrics.processing_width, metrics.processing_height),
+            packets_by_frame);
     }
 
     std::ofstream csv(csv_path);
@@ -280,12 +380,13 @@ void write_outputs(
         throw std::runtime_error("Unable to create CSV output.");
     }
 
-    csv << "frame_index,worker_rank,timestamp_ms,people_count,mean_intensity,edge_density,read_ms,preprocess_ms,detection_ms,processing_ms\n";
+    csv << "frame_index,worker_rank,gpu_device_id,timestamp_ms,people_count,mean_intensity,edge_density,read_ms,preprocess_ms,detection_ms,processing_ms\n";
     csv << std::fixed << std::setprecision(3);
     for (const auto& packet : ordered_packets) {
         const auto& frame = packet.result;
         csv << frame.frame_index << ','
             << frame.worker_rank << ','
+            << frame.gpu_device_id << ','
             << frame.timestamp_ms << ','
             << frame.people_count << ','
             << frame.mean_intensity << ','
@@ -311,6 +412,8 @@ void write_outputs(
     json << "  \"input_video\": \"" << input_path << "\",\n";
     json << "  \"width\": " << metadata.width << ",\n";
     json << "  \"height\": " << metadata.height << ",\n";
+    json << "  \"processing_width\": " << metrics.processing_width << ",\n";
+    json << "  \"processing_height\": " << metrics.processing_height << ",\n";
     json << "  \"fps\": " << metadata.fps << ",\n";
     json << "  \"frame_count\": " << metadata.frame_count << ",\n";
     json << "  \"duration_seconds\": " << metadata.duration_seconds << ",\n";
@@ -322,16 +425,19 @@ void write_outputs(
     json << "  \"annotated_video_enabled\": " << (metrics.annotated_video_enabled ? "true" : "false") << ",\n";
     json << "  \"scheduler\": \"" << metrics.scheduler_name << "\",\n";
     json << "  \"mpi_world_size\": " << metrics.mpi_world_size << ",\n";
-    json << "  \"requested_cuda_workers\": " << metrics.requested_cuda_workers << ",\n";
+    json << "  \"requested_workers\": " << metrics.requested_workers << ",\n";
+    json << "  \"requested_cuda_workers\": " << metrics.requested_workers << ",\n";
     json << "  \"cuda_worker_count\": " << unique_worker_count(ordered_packets) << ",\n";
     json << "  \"tracking_mode\": \"visualization_only\",\n";
     json << "  \"average_people_per_frame\": " << average_people(ordered_packets) << ",\n";
     json << "  \"max_people_in_frame\": " << max_people(ordered_packets) << ",\n";
+    json << "  \"accumulated_people\": " << unique_people_total << ",\n";
+    json << "  \"accumulated_detections\": " << detection_accumulated << ",\n";
     json << "  \"average_read_ms\": " << average_metric(ordered_packets, [](const FrameResult& result) { return result.read_ms; }) << ",\n";
     json << "  \"average_preprocess_ms\": " << average_metric(ordered_packets, [](const FrameResult& result) { return result.preprocess_ms; }) << ",\n";
     json << "  \"average_detection_ms\": " << average_metric(ordered_packets, [](const FrameResult& result) { return result.detection_ms; }) << ",\n";
     json << "  \"average_processing_ms\": " << average_metric(ordered_packets, [](const FrameResult& result) { return result.processing_ms; }) << ",\n";
-    write_load_balance_json(json, worker_aggregates, metrics.requested_cuda_workers, ordered_packets.size());
+    write_load_balance_json(json, worker_aggregates, metrics.requested_workers, ordered_packets.size());
     write_worker_stats_json(json, worker_aggregates, ordered_packets.size());
     json << "  \"distributed_processing_ms\": " << metrics.distributed_processing_ms << ",\n";
     json << "  \"output_write_ms\": " << output_write_ms << ",\n";
