@@ -156,6 +156,13 @@ Ejemplo recomendado:
 
 En una granja de GPUs, el comportamiento por defecto ya reparte workers entre las GPUs visibles de cada nodo. Para que eso funcione bien, `--input` y `--model` deben apuntar a rutas accesibles desde todos los nodos (por ejemplo, un filesystem compartido).
 
+Para automatizar el despliegue en red sin tener que escribir el archivo hostfile a mano, utiliza el orquestador automático de Python:
+```bash
+./scripts/launch_cluster.py \
+  --ips localhost,192.168.1.55 \
+  --args "--input dataset/videoset2.mp4 --output-dir output_videoset2 --batch-size 8 --scheduler dynamic"
+```
+
 Si prefieres controlar tú el tamaño del mundo MPI, puedes seguir usando `mpirun` manualmente.
 
 Si necesitas forzar un dispositivo concreto dentro del conjunto visible del proceso:

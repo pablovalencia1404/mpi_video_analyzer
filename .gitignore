@@ -5,6 +5,7 @@ output/
 output_*/
 parallel_benchmarks/
 benchmark_*/
+hosts_cluster.txt
 *.pt
 *.png
 __pycache__/
