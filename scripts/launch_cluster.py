@@ -99,15 +99,20 @@ def main():
 
     hostfile_path = "hosts_cluster.txt"
     print(f"\n[*] Generating hostfile: {hostfile_path}")
+    import socket
+    local_hostname = socket.gethostname()
+
     with open(hostfile_path, "w") as f:
         for ip, slots in slots_per_ip.items():
-            if ip not in ("localhost", "127.0.0.1") and args.user:
+            if ip in ("localhost", "127.0.0.1"):
+                f.write(f"{local_hostname} slots={slots}\n")
+            elif args.user:
                 f.write(f"{args.user}@{ip} slots={slots}\n")
             else:
                 f.write(f"{ip} slots={slots}\n")
 
     total_slots = sum(slots_per_ip.values())
-    
+
     mpi_cmd = f"mpiexec --mca plm_rsh_args \"-o StrictHostKeyChecking=no\" --mca btl_tcp_disable_family IPv6 --hostfile {hostfile_path} -n {total_slots} {args.executable} {args.args}"
     print(f"[*] Launching MPI Cluster with {total_slots} total processes...")
     print(f"    $ {mpi_cmd}\n")
