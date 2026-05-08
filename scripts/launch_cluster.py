@@ -5,7 +5,7 @@ import sys
 import os
 
 def check_remote_gpus(ip, user):
-    ssh_cmd = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5"]
+    ssh_cmd = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", "-o", "StrictHostKeyChecking=no"]
     if user:
         ssh_cmd.append(f"{user}@{ip}")
     else:
@@ -108,7 +108,7 @@ def main():
 
     total_slots = sum(slots_per_ip.values())
     
-    mpi_cmd = f"mpiexec --hostfile {hostfile_path} -n {total_slots} {args.executable} {args.args}"
+    mpi_cmd = f"mpiexec --mca plm_rsh_args \"-o StrictHostKeyChecking=no\" --mca btl_tcp_disable_family IPv6 --hostfile {hostfile_path} -n {total_slots} {args.executable} {args.args}"
     print(f"[*] Launching MPI Cluster with {total_slots} total processes...")
     print(f"    $ {mpi_cmd}\n")
     
