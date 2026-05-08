@@ -20,13 +20,21 @@ def check_remote_gpus(ip, user):
     try:
         res_nv = subprocess.run(ssh_cmd + [cmd_nvidia], capture_output=True, text=True, check=True)
         nvidia_count = int(res_nv.stdout.strip())
-    except Exception:
+    except subprocess.CalledProcessError as e:
+        print(f"  [!] SSH/Command error on {ip} (NVIDIA check). Exit code {e.returncode}. {e.stderr.strip() if e.stderr else ''}")
+        nvidia_count = 0
+    except Exception as e:
+        print(f"  [!] Error connecting to {ip}: {e}")
         nvidia_count = 0
 
     try:
         res_dri = subprocess.run(ssh_cmd + [cmd_dri], capture_output=True, text=True, check=True)
         dri_count = int(res_dri.stdout.strip())
-    except Exception:
+    except subprocess.CalledProcessError as e:
+        print(f"  [!] SSH/Command error on {ip} (OpenCL check). Exit code {e.returncode}. {e.stderr.strip() if e.stderr else ''}")
+        dri_count = 0
+    except Exception as e:
+        print(f"  [!] Error connecting to {ip}: {e}")
         dri_count = 0
 
     opencl_count = dri_count
