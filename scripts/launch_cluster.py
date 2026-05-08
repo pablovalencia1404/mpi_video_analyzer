@@ -101,7 +101,10 @@ def main():
     print(f"\n[*] Generating hostfile: {hostfile_path}")
     with open(hostfile_path, "w") as f:
         for ip, slots in slots_per_ip.items():
-            f.write(f"{ip} slots={slots}\n")
+            if ip not in ("localhost", "127.0.0.1") and args.user:
+                f.write(f"{args.user}@{ip} slots={slots}\n")
+            else:
+                f.write(f"{ip} slots={slots}\n")
 
     total_slots = sum(slots_per_ip.values())
     
