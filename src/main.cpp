@@ -8,7 +8,9 @@
 #include <system_error>
 #include <unistd.h>
 
+#ifdef RESCUE_ENABLE_CUDA
 #include <cuda_runtime.h>
+#endif
 
 #include "rescue/mpi_runtime.hpp"
 #include "rescue/types.hpp"
@@ -197,6 +199,7 @@ bool running_under_mpi_launcher() {
     return false;
 }
 
+#ifdef RESCUE_ENABLE_CUDA
 int visible_cuda_device_count() {
     int count = 0;
     const cudaError_t error = cudaGetDeviceCount(&count);
@@ -209,6 +212,7 @@ int visible_cuda_device_count() {
     }
     return count;
 }
+#endif
 
 std::string resolve_executable_path(char** argv) {
     std::error_code error_code;
