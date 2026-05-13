@@ -1,0 +1,37 @@
+@startuml
+title Rescue Video Analyzer - Secuencia MPI dinamica
+
+skinparam backgroundColor #FFFFFF
+skinparam shadowing false
+skinparam SequenceArrowThickness 1
+skinparam ParticipantBorderColor #355070
+skinparam ParticipantBackgroundColor #F7FAFC
+
+participant "Usuario" as User
+participant "Rank 0\nMaestro" as Master
+participant "VideoReader" as Reader
+participant "Worker rapido\nrank 1" as Fast
+participant "Worker lento\nrank 2" as Slow
+participant "OutputWriter" as Writer
+
+User -> Master : mpirun -np N rescue_video_analyzer
+Master -> Reader : abrir video y leer metadata
+Master -> Fast : enviar lote inicial
+Master -> Slow : enviar lote inicial
+
+loop mientras queden lotes
+  Fast -> Fast : preprocesar + inferir
+  Fast -> Master : resultados de lote
+  Master -> Fast : siguiente lote disponible
+end
+
+Slow -> Slow : preprocesar + inferir
+Slow -> Master : resultados de lote
+Master -> Slow : siguiente lote o stop
+
+Master -> Fast : stop
+Master -> Slow : stop
+Master -> Master : ordenar FramePacket por frame_index
+Master -> Writer : escribir CSV, JSON y video anotado
+Writer --> User : artefactos en output/
+@enduml

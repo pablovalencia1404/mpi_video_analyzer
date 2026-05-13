@@ -1,0 +1,48 @@
+@startuml
+!pragma layout smetana
+title Rescue Video Analyzer - Arquitectura general
+
+skinparam backgroundColor #FFFFFF
+skinparam componentStyle rectangle
+skinparam shadowing false
+skinparam ArrowColor #355070
+skinparam ComponentBorderColor #355070
+skinparam ComponentBackgroundColor #F7FAFC
+skinparam DatabaseBorderColor #6D597A
+skinparam DatabaseBackgroundColor #F8F4FA
+
+actor Usuario
+
+rectangle "Proceso maestro\nMPI rank 0" as Master {
+  component "VideoReader\nOpenCV VideoCapture" as Reader
+  component "Scheduler MPI\n(dynamic/static)" as Scheduler
+  component "Agregador\nordenacion por frame" as Aggregator
+  component "OutputWriter\nCSV, JSON, video anotado" as Writer
+  component "SimpleTracker\nsolo visualizacion" as Tracker
+}
+
+rectangle "Workers MPI\nrank 1..N" as Workers {
+  component "Recepcion de lote\nBatchHeader + frames" as Receiver
+  component "Preprocesado GPU\nresize, letterbox, NCHW" as Preprocess
+  component "Detector YOLO11\nONNX Runtime CUDA / OpenCV OpenCL" as Detector
+  component "FramePacket\nconteo + cajas + tiempos" as Packet
+}
+
+database "dataset/\nvideos de entrada" as Dataset
+database "models/\nYOLO11 ONNX" as Models
+database "output/\nframe_results.csv\nsummary.json\nannotated_people.mp4" as Output
+
+Usuario --> Master : ejecuta binario o mpirun
+Dataset --> Reader : frames
+Reader --> Scheduler : lotes de frames
+Scheduler --> Receiver : MPI_Send
+Models --> Detector : modelo ONNX
+Receiver --> Preprocess : cv::Mat
+Preprocess --> Detector : tensor normalizado
+Detector --> Packet : detecciones por frame
+Packet --> Aggregator : MPI_Send resultados
+Aggregator --> Tracker : cajas ordenadas
+Aggregator --> Writer : metricas y detecciones
+Tracker --> Writer : IDs visuales acumulados
+Writer --> Output
+@enduml

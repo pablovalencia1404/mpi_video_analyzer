@@ -1,0 +1,73 @@
+@startuml
+!pragma layout smetana
+title Rescue Video Analyzer - Datos y salidas
+
+skinparam backgroundColor #FFFFFF
+skinparam shadowing false
+skinparam classAttributeIconSize 0
+skinparam ClassBorderColor #355070
+skinparam ClassBackgroundColor #F7FAFC
+skinparam ArrowColor #355070
+
+class AppConfig {
+  input_path
+  output_dir
+  batch_size
+  gpu_backend
+  gpu_device_id
+  resize_width
+  processing_width
+  processing_height
+  scheduler_mode
+  thresholds
+}
+
+class BatchHeader {
+  start_frame
+  frame_count
+  frame_width
+  frame_height
+  processing_width
+  processing_height
+  fps
+}
+
+class FramePacket {
+  FrameResult result
+  detection_count
+  DetectionBox[128] detections
+}
+
+class FrameResult {
+  frame_index
+  worker_rank
+  gpu_device_id
+  people_count
+  read_ms
+  preprocess_ms
+  detection_ms
+  processing_ms
+}
+
+class DetectionBox {
+  x
+  y
+  width
+  height
+  confidence
+  class_id
+}
+
+class "frame_results.csv" as CSV
+class "summary.json" as JSON
+class "annotated_people.mp4/.avi" as Video
+
+AppConfig --> BatchHeader : configura lotes
+BatchHeader --> FramePacket : produce resultados
+FramePacket *-- FrameResult
+FramePacket *-- DetectionBox
+FrameResult --> CSV
+FrameResult --> JSON
+DetectionBox --> Video
+DetectionBox --> JSON
+@enduml
