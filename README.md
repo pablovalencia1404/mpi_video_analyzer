@@ -35,13 +35,13 @@ El maestro lee el video, crea lotes de frames y los envia por MPI. Cada worker r
 
 ## Flujo MPI
 
-El scheduler puede ser dinamico o estatico. El modo recomendado es `dynamic`, porque permite que los workers rapidos reciban mas lotes sin esperar a los lentos.
+El scheduler puede ser dinamico o estatico. El modo recomendado es `dynamic`, porque cada worker recibe un nuevo lote cuando termina el anterior. Asi el maestro se adapta a la capacidad real de cada GPU disponible, sin asumir que todos los dispositivos o nodos rinden igual.
 
 ![Secuencia MPI dinamica](docs/diagrams/mpi_sequence.svg)
 
 Schedulers disponibles:
 
-- `dynamic`: reparte un nuevo lote al worker que termina antes.
+- `dynamic`: reparte un nuevo lote al worker que acaba de quedar disponible.
 - `static-contiguous`: asigna bloques contiguos de frames a cada worker.
 - `static-round-robin`: reparte lotes por turnos entre workers.
 
@@ -68,7 +68,7 @@ El proyecto puede ejecutarse en una sola maquina o en un cluster MPI. En cluster
 
 ![Despliegue](docs/diagrams/deployment.svg)
 
-El script `scripts/launch_cluster.py` genera un `hosts_cluster.txt` y lanza `mpiexec` con tantos slots como GPUs detecte. Para ejecuciones controladas y benchmarks, suele ser mas claro usar `mpirun` manualmente.
+El descubrimiento de GPUs del sistema MPI lo hace `scripts/launch_cluster.py`: sondea las maquinas indicadas en `--ips`, cuenta GPUs NVIDIA y OpenCL disponibles, genera `hosts_cluster.txt` y lanza `mpiexec` con `1` rank maestro mas un worker por cada GPU detectada. Si lanzas el programa manualmente, entonces el numero total de ranks lo fijas tu con `mpirun`/`mpiexec`.
 
 ## Datos y salidas
 
@@ -224,7 +224,7 @@ mpirun -np 2 ./build/rescue_video_analyzer \
   --no-annotated-video
 ```
 
-El binario tambien puede relanzar `mpirun` automaticamente si lo ejecutas sin launcher MPI. En modo `--gpu-backend cuda`, crea `1` maestro y `1` worker por GPU CUDA visible. En modo `auto`, si hay CUDA visible, tambien puede crear un worker adicional para la ruta OpenCL/CPU; para resultados de rendimiento mas limpios en una sola GPU, usa `mpirun -np 2` explicitamente.
+El binario tambien puede relanzar `mpirun` automaticamente si lo ejecutas sin launcher MPI, pero ese autolanzamiento solo mira la maquina local. En modo `--gpu-backend cuda`, crea `1` maestro y `1` worker por GPU CUDA visible local. En cluster, usa `scripts/launch_cluster.py` para descubrir las GPUs de las maquinas de `--ips` y lanzar `1` rank maestro mas tantos workers como GPUs detectadas; cada worker queda ligado a una GPU visible mediante su `local_worker_rank` y procesa lotes al ritmo que permita su dispositivo.
 
 ## Ejemplos utiles
 
@@ -317,7 +317,7 @@ El script escribe una tabla TSV por stdout y guarda cada ejecucion en:
 parallel_benchmarks/np<N>_<scheduler>/
 ```
 
-En una maquina con una sola GPU NVIDIA, no conviene interpretar `np=3` o `np=4` como escalado multi-GPU puro: varios workers pueden compartir el mismo dispositivo o caer a OpenCL/CPU. Para una comparacion limpia de inferencia CUDA en una GPU, usa `np=2`.
+En una maquina con una sola GPU NVIDIA, no conviene interpretar `np=3` o `np=4` como escalado multi-GPU puro: ahi hay mas workers que GPUs CUDA disponibles. Para una comparacion limpia de inferencia CUDA en una GPU, usa `np=2`. En cluster o multi-GPU, configura `np = 1 + numero_total_de_GPUs` para mantener el esquema natural de `1` maestro y `1` worker por GPU.
 
 Prueba local reciente sobre `dataset/videoset2.mp4`, `mpirun -np 2`, `--batch-size 8`, `--no-annotated-video`:
 
@@ -333,7 +333,7 @@ Prueba local reciente sobre `dataset/videoset2.mp4`, `mpirun -np 2`, `--batch-si
 
 ## Cluster MPI
 
-Lanzamiento automatico:
+Lanzamiento automatico con descubrimiento de GPUs:
 
 ```bash
 ./scripts/launch_cluster.py \
@@ -358,6 +358,7 @@ Requisitos practicos para cluster:
 - `dataset/` y `models/` deben estar accesibles desde todos los nodos.
 - Las variables de entorno de CUDA/ONNX Runtime deben resolverse en cada nodo.
 - SSH sin interaccion debe estar configurado para OpenMPI.
+- `scripts/launch_cluster.py` cuenta GPUs con `nvidia-smi` y `clinfo`; si un nodo no reporta GPUs, reserva un slot de fallback CPU/OpenCL para no dejarlo fuera del hostfile.
 
 ## Diagramas PlantUML
 
@@ -399,9 +400,9 @@ Comprueba `nvidia-smi` dentro de WSL/Ubuntu. En WSL tambien deben estar visibles
 
 Activa la `.venv`, instala `onnxruntime-gpu` o exporta `RESCUE_ORT_LIBRARY`.
 
-Rendimiento peor con mas workers
+Rendimiento peor al lanzar mas workers que GPUs
 
-En una sola GPU, mas workers no significa mas GPUs. Puede haber contencion por el mismo dispositivo o mezcla con OpenCL/CPU. Usa `mpirun -np 2` para medir la ruta CUDA principal.
+El flujo normal es un worker por GPU participante. Si lanzas mas workers que GPUs reales, puede haber contencion por el mismo dispositivo o mezcla con OpenCL/CPU. En una sola GPU CUDA, usa `mpirun -np 2` para medir la ruta principal.
 
 PlantUML avisa de que falta `dot`
 

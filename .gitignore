@@ -9,8 +9,4 @@ hosts_cluster.txt
 *.pt
 *.png
 __pycache__/
-memoria_proyecto.aux
-memoria_proyecto.log
-memoria_proyecto.out
-memoria_proyecto.toc
-memoria_proyecto.pdf
+

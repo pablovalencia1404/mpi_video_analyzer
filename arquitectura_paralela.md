@@ -35,19 +35,19 @@ En nodos con gráficas integradas (ej. Intel Iris Xe), la RAM y la VRAM comparte
 
 ## 3. Planificación (Scheduling) y Balanceo de Carga
 
-En un clúster heterogéneo (NVIDIA RTX 4070 Laptop vs Intel Graphics), existe una **asimetría computacional severa**. La NVIDIA puede procesar un frame en ~17 ms, mientras que la Intel necesita ~190 ms.
+El modelo normal de ejecución es lanzar **un worker por cada GPU participante** en el conjunto de máquinas usado por MPI, además del rank maestro. Cada worker queda ligado a una GPU visible de su nodo y procesa lotes al ritmo que permita ese dispositivo. El sistema no presupone que todas las GPUs sean idénticas ni que todos los nodos tengan el mismo rendimiento.
 
-### Fracaso del reparto estático (Round-Robin / Bloques contiguos)
-Si el Maestro utilizara una planificación estática (asignar el lote 1 a la GPU A, el lote 2 a la GPU B), sufriríamos el peor escenario del paralelismo: **Sincronización de barrera implícita**.
-La ejecución global de la aplicación se vería frenada por la GPU más lenta (el eslabón más débil). La GPU rápida terminaría su trabajo inmediatamente y pasaría el 90% del tiempo de ejecución en estado inactivo (*Idle*) esperando a que la GPU lenta terminase para recibir el siguiente bloque de datos.
+### Reparto estático (Round-Robin / Bloques contiguos)
+Los modos estáticos (`static-contiguous` y `static-round-robin`) son útiles para comparar estrategias de planificación porque fijan de antemano qué lotes procesa cada worker. Su inconveniente es que, si las GPUs o nodos tienen rendimiento distinto, puede aparecer desequilibrio: algunos workers terminan su cola antes y quedan inactivos mientras otros siguen procesando los lotes asignados.
 
-### Éxito de la Planificación Dinámica (Dynamic Load Balancing)
-Para maximizar el *Throughput* (Rendimiento global) y la Utilización de Hardware, se ha implementado un despachador maestro asíncrono usando `MPI_ANY_SOURCE`.
-1. El Maestro inyecta un *job* inicial en la cola de todos los Workers.
-2. El Maestro bloquea su ejecución esperando una respuesta de **cualquier** Worker.
-3. Tan pronto como el Worker más rápido (NVIDIA) termina su ráfaga, devuelve los resultados. El Maestro le inyecta instantáneamente un nuevo lote.
-4. El Worker lento (Intel) retiene su carga sin bloquear al sistema general.
-**Resultado:** Se logra un balanceo de carga empírico perfecto. La tarjeta NVIDIA procesa asincrónicamente el 90% del vídeo, mientras que la Intel ayuda asumiendo el 10% restante. La ley de Amdahl se ve mitigada porque el cuello de botella secuencial (la lectura del vídeo por el maestro) es mínimo frente al coste de inferencia.
+### Planificación Dinámica (Dynamic Load Balancing)
+Para maximizar el *Throughput* (rendimiento global) y la utilización de hardware, se ha implementado un despachador maestro asíncrono usando `MPI_ANY_SOURCE`.
+1. El Maestro envía un lote inicial a cada Worker disponible.
+2. Cada Worker preprocesa e infiere sobre su GPU asignada.
+3. Cuando cualquier Worker termina, devuelve sus resultados al Maestro.
+4. Si quedan frames pendientes, el Maestro entrega otro lote a ese mismo Worker.
+
+**Resultado:** El reparto se adapta a la capacidad efectiva de las GPUs participantes. Los dispositivos con más capacidad procesan más lotes porque quedan disponibles más veces, y los dispositivos con menos capacidad siguen aportando trabajo sin imponer una barrera global por lote. La ley de Amdahl se mitiga porque el cuello de botella secuencial (la lectura del vídeo por el maestro) es pequeño frente al coste de inferencia.
 
 ---
 
@@ -55,7 +55,7 @@ Para maximizar el *Throughput* (Rendimiento global) y la Utilización de Hardwar
 
 El sistema ha sido adaptado para permitir escalabilidad horizontal (añadir más nodos físicos a la red) en lugar de depender exclusivamente del escalamiento vertical (comprar GPUs más potentes).
 
-- **Auto-descubrimiento y Mapeo Físico:** Cuando el orquestador inyecta procesos MPI en un nodo, la librería subyacente otorga un `local_rank` a los workers que comparten placa base. Nuestro diseño utiliza este identificador para ligar a cada hilo de ejecución a un motor de silicio distinto (Worker 0 -> `/dev/nvmeX` NVIDIA, Worker 1 -> `/dev/dri` OpenCL). Evitando condiciones de carrera y la sobre-suscripción del planificador de hardware de las GPUs.
+- **Auto-descubrimiento y Mapeo Físico:** Cuando el orquestador inyecta procesos MPI en un nodo, la librería subyacente otorga un `local_rank` a los workers que comparten placa base. El diseño utiliza este identificador para ligar cada worker a una GPU visible distinta dentro del nodo siempre que sea posible, evitando la sobre-suscripción accidental del mismo dispositivo.
 - **Granularidad de Lotes (Batching):** Dado que la transferencia de datos por la red (Gigabit Ethernet) tiene una latencia muy alta comparada con el bus PCI-e, el sistema empaqueta fotogramas en *Batches*. Enviar lotes grandes amortiza el *overhead* de los paquetes TCP/IP y satura los pipelines aritméticos de las GPUs (manteniendo los núcleos CUDA ocupados sin latencias de red intermedias).
 
 ## 5. Resumen de Aportaciones al Rendimiento

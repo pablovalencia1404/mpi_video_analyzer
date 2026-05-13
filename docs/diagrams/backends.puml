@@ -30,7 +30,7 @@ BindCuda --> PreCuda
 PreCuda --> Vram
 Vram --> DetCuda
 
-Worker --> BindOpenCL : --gpu-backend opencl\no worker extra en auto
+Worker --> BindOpenCL : --gpu-backend opencl\no GPU OpenCL disponible
 BindOpenCL --> PreOpenCL
 PreOpenCL --> UMat
 UMat --> DetOpenCL

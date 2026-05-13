@@ -10,27 +10,27 @@ skinparam ParticipantBackgroundColor #F7FAFC
 participant "Usuario" as User
 participant "Rank 0\nMaestro" as Master
 participant "VideoReader" as Reader
-participant "Worker rapido\nrank 1" as Fast
-participant "Worker lento\nrank 2" as Slow
+participant "Worker GPU A\nrank 1" as WorkerA
+participant "Worker GPU B\nrank 2" as WorkerB
 participant "OutputWriter" as Writer
 
 User -> Master : mpirun -np N rescue_video_analyzer
 Master -> Reader : abrir video y leer metadata
-Master -> Fast : enviar lote inicial
-Master -> Slow : enviar lote inicial
+Master -> WorkerA : enviar lote inicial
+Master -> WorkerB : enviar lote inicial
 
-loop mientras queden lotes
-  Fast -> Fast : preprocesar + inferir
-  Fast -> Master : resultados de lote
-  Master -> Fast : siguiente lote disponible
+loop mientras queden lotes disponibles
+  WorkerA -> WorkerA : preprocesar + inferir a su ritmo
+  WorkerA -> Master : resultados de lote
+  Master -> WorkerA : siguiente lote disponible
 end
 
-Slow -> Slow : preprocesar + inferir
-Slow -> Master : resultados de lote
-Master -> Slow : siguiente lote o stop
+WorkerB -> WorkerB : preprocesar + inferir a su ritmo
+WorkerB -> Master : resultados de lote
+Master -> WorkerB : siguiente lote disponible o stop
 
-Master -> Fast : stop
-Master -> Slow : stop
+Master -> WorkerA : stop
+Master -> WorkerB : stop
 Master -> Master : ordenar FramePacket por frame_index
 Master -> Writer : escribir CSV, JSON y video anotado
 Writer --> User : artefactos en output/
