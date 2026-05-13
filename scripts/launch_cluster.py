@@ -113,7 +113,7 @@ def main():
 
     total_slots = sum(slots_per_ip.values())
 
-    mpi_cmd = f"mpiexec --mca plm_rsh_args \"-o StrictHostKeyChecking=no\" --mca btl_tcp_disable_family IPv6 --hostfile {hostfile_path} -n {total_slots} {args.executable} {args.args}"
+    mpi_cmd = f"mpiexec -x HWLOC_COMPONENTS=\"-gl,-cuda,-nvml,-opencl\" --mca plm_rsh_args \"-o StrictHostKeyChecking=no\" --mca btl_tcp_disable_family IPv6 --hostfile {hostfile_path} -n {total_slots} {args.executable} {args.args}"
     print(f"[*] Launching MPI Cluster with {total_slots} total processes...")
     print(f"    $ {mpi_cmd}\n")
     
