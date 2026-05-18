@@ -1,186 +1,176 @@
-# MPI Video Analyzer
+# Rescue Video Analyzer
 
-Analizador distribuido de video para detectar y contar personas por frame usando YOLO11 en formato ONNX. El proyecto combina paralelismo de grano grueso con MPI y aceleracion GPU con CUDA u OpenCL.
+Analizador distribuido de video para detectar, contar y seguir personas por frame
+usando modelos YOLO11 en formato ONNX. El proyecto combina paralelismo con MPI,
+preprocesado acelerado por GPU y dos backends de inferencia: CUDA y OpenCL.
 
-El caso de uso principal es procesar videos de vigilancia o rescate, repartir el trabajo entre procesos MPI y generar resultados reproducibles:
+Esta pensado para escenarios de vigilancia, rescate o analisis de video donde
+interesa procesar secuencias largas de forma reproducible y comparar el impacto
+del reparto de trabajo entre varios procesos o nodos.
 
-- `output/frame_results.csv`: metricas por frame.
-- `output/summary.json`: resumen global, balanceo de carga y tiempos.
-- `output/annotated_people.mp4` o `.avi`: video anotado con cajas y conteo visual.
+## Caracteristicas
 
-## Contenido del proyecto
+- Deteccion de personas con YOLO11 exportado a ONNX.
+- Arquitectura maestro/trabajador sobre MPI.
+- Scheduler dinamico para balancear carga entre GPUs con distinto rendimiento.
+- Schedulers estaticos para comparar estrategias de reparto.
+- Backend CUDA con ONNX Runtime y preprocesado en kernels CUDA.
+- Backend OpenCL con OpenCV DNN como alternativa portable.
+- Generacion de CSV por frame, resumen JSON y video anotado.
+- Scripts para benchmarks locales y lanzamiento en cluster MPI.
+- Diagramas PlantUML incluidos en `docs/diagrams/`.
 
-```text
-.
-|-- CMakeLists.txt
-|-- README.md
-|-- arquitectura_paralela.md
-|-- dataset/                 # videos de prueba
-|-- docs/diagrams/           # diagramas PlantUML y SVG generados
-|-- include/rescue/          # cabeceras publicas del proyecto
-|-- models/                  # modelos YOLO11 exportados a ONNX
-|-- scripts/
-|   |-- benchmark_parallel.sh
-|   `-- launch_cluster.py
-`-- src/                     # implementacion C++, CUDA y OpenCL
-```
+## Tabla de contenidos
+
+- [Arquitectura](#arquitectura)
+- [Estructura del repositorio](#estructura-del-repositorio)
+- [Requisitos](#requisitos)
+- [Instalacion](#instalacion)
+- [Compilacion](#compilacion)
+- [Uso rapido](#uso-rapido)
+- [Opciones de ejecucion](#opciones-de-ejecucion)
+- [Modelos ONNX](#modelos-onnx)
+- [Salidas generadas](#salidas-generadas)
+- [Benchmarks](#benchmarks)
+- [Ejecucion en cluster](#ejecucion-en-cluster)
+- [Diagramas](#diagramas)
+- [Troubleshooting](#troubleshooting)
 
 ## Arquitectura
 
-El binario es SPMD: todos los procesos ejecutan `rescue_video_analyzer`, pero el `rank 0` actua como maestro y los demas ranks como workers.
+El ejecutable `rescue_video_analyzer` usa un modelo SPMD: todos los procesos
+ejecutan el mismo binario, pero el rank `0` actua como maestro y el resto de
+ranks como trabajadores.
 
 ![Arquitectura general](docs/diagrams/architecture.svg)
 
-El maestro lee el video, crea lotes de frames y los envia por MPI. Cada worker recibe un lote, prepara los frames para YOLO, ejecuta inferencia y devuelve al maestro un `FramePacket` por frame. El maestro ordena los resultados por `frame_index`, ejecuta el tracker solo para visualizacion y escribe las salidas.
+Flujo principal:
 
-## Flujo MPI
+1. El maestro abre el video de entrada y agrupa frames en lotes.
+2. Los lotes se envian a workers mediante MPI.
+3. Cada worker preprocesa frames, ejecuta inferencia y devuelve detecciones.
+4. El maestro ordena resultados por `frame_index`.
+5. El maestro calcula metricas, aplica tracking para visualizacion y escribe las
+   salidas.
 
-El scheduler puede ser dinamico o estatico. El modo recomendado es `dynamic`, porque cada worker recibe un nuevo lote cuando termina el anterior. Asi el maestro se adapta a la capacidad real de cada GPU disponible, sin asumir que todos los dispositivos o nodos rinden igual.
+El scheduler recomendado es `dynamic`, porque entrega el siguiente lote al
+worker que queda libre primero. Esto suele funcionar mejor en entornos
+heterogeneos, donde no todas las GPUs o nodos tienen el mismo rendimiento.
 
 ![Secuencia MPI dinamica](docs/diagrams/mpi_sequence.svg)
 
 Schedulers disponibles:
 
-- `dynamic`: reparte un nuevo lote al worker que acaba de quedar disponible.
-- `static-contiguous`: asigna bloques contiguos de frames a cada worker.
-- `static-round-robin`: reparte lotes por turnos entre workers.
+| Scheduler | Descripcion |
+| --- | --- |
+| `dynamic` | Asigna nuevos lotes a medida que cada worker termina. |
+| `static-contiguous` | Divide el video en bloques contiguos por worker. |
+| `static-round-robin` | Reparte lotes por turnos entre workers. |
 
-## Backends GPU
+### Backends GPU
 
 ![Backends de inferencia](docs/diagrams/backends.svg)
 
-Ruta CUDA principal:
+Backend CUDA:
 
-- Preprocesado con kernels CUDA en `src/gpu_preprocess.cu`.
-- Letterbox, normalizacion y empaquetado `NCHW` en GPU.
-- Inferencia con ONNX Runtime CUDA en `src/yolo_detector_cuda.cpp`.
-- Carga dinamica de `libonnxruntime` desde `.venv` o desde `RESCUE_ORT_LIBRARY`.
+- Preprocesado en `src/gpu_preprocess.cu`.
+- Letterbox, normalizacion y layout `NCHW` en GPU.
+- Inferencia mediante ONNX Runtime CUDA.
+- Carga dinamica de `libonnxruntime`.
 
-Ruta OpenCL alternativa:
+Backend OpenCL:
 
-- Preprocesado con OpenCV `UMat` en `src/gpu_preprocess_opencl.cpp`.
-- Inferencia con OpenCV DNN y target OpenCL en `src/yolo_detector_opencl.cpp`.
-- Si OpenCL no esta disponible en OpenCV, el backend puede caer a CPU para esa ruta.
+- Preprocesado con OpenCV `UMat`.
+- Inferencia con OpenCV DNN y target OpenCL.
+- Puede caer a CPU si OpenCV no tiene OpenCL disponible.
 
-## Despliegue
+## Estructura del repositorio
 
-El proyecto puede ejecutarse en una sola maquina o en un cluster MPI. En cluster, las rutas de `dataset/` y `models/` deben existir en todos los nodos o estar en un filesystem compartido.
+```text
+.
+|-- CMakeLists.txt
+|-- README.md
+|-- dataset/                 # Videos de ejemplo
+|-- docs/
+|   |-- diagrams/            # Diagramas PlantUML y SVG
+|   |-- memoria.pdf
+|   `-- memoria.tex
+|-- include/rescue/          # Cabeceras publicas del proyecto
+|-- models/                  # Modelos YOLO11 en formato ONNX
+|-- scripts/
+|   |-- benchmark_parallel.sh
+|   `-- launch_cluster.py
+`-- src/                     # Implementacion C++, CUDA y OpenCL
+```
 
-![Despliegue](docs/diagrams/deployment.svg)
+Los directorios `build/`, `output/`, `parallel_benchmarks/` y `.venv/` son
+artefactos locales y no forman parte del codigo fuente.
 
-El descubrimiento de GPUs del sistema MPI lo hace `scripts/launch_cluster.py`: sondea las maquinas indicadas en `--ips`, cuenta GPUs NVIDIA y OpenCL disponibles, genera `hosts_cluster.txt` y lanza `mpiexec` con `1` rank maestro mas un worker por cada GPU detectada. Si lanzas el programa manualmente, entonces el numero total de ranks lo fijas tu con `mpirun`/`mpiexec`.
+## Requisitos
 
-## Datos y salidas
-
-![Datos y salidas](docs/diagrams/data_outputs.svg)
-
-Campos principales de `frame_results.csv`:
-
-- `frame_index`: indice del frame en el video.
-- `worker_rank`: rank MPI que proceso el frame.
-- `gpu_device_id`: GPU visible usada por el worker.
-- `timestamp_ms`: instante del frame segun el FPS del video.
-- `people_count`: detecciones de clase persona transmitidas para ese frame.
-- `mean_intensity` y `edge_density`: metricas auxiliares del preprocesado.
-- `read_ms`, `preprocess_ms`, `detection_ms`, `processing_ms`: tiempos por etapa.
-
-Campos principales de `summary.json`:
-
-- Metadatos del video: resolucion, FPS, frames y duracion.
-- Configuracion efectiva: scheduler, mundo MPI, workers y resolucion de procesamiento.
-- Estadisticas de deteccion: media, maximo, acumulado de detecciones y acumulado visual por tracking.
-- Balanceo de carga: frames por worker, ratio maximo/media y estadisticas por rank.
-- Tiempos globales: `distributed_processing_ms`, `output_write_ms`, `total_wall_ms`.
-
-## Dependencias
-
-En Ubuntu/WSL necesitas:
+Requisitos base:
 
 - CMake 3.24 o superior.
-- OpenCV 4 con modulos `core`, `imgproc`, `videoio`, `objdetect` y `dnn`.
-- OpenMPI (`mpicxx`, `mpirun`).
-- CUDA Toolkit (`nvcc`, `cudart`) para el backend CUDA.
-- Java para PlantUML.
-- PlantUML para regenerar diagramas.
+- Compilador C++17.
+- OpenCV 4 con los modulos `core`, `imgproc`, `videoio`, `objdetect` y `dnn`.
+- OpenMPI (`mpicxx`, `mpirun` o `mpiexec`).
 
-Instalacion habitual con permisos sudo:
+Para CUDA:
+
+- CUDA Toolkit con `nvcc`.
+- Driver NVIDIA compatible.
+- ONNX Runtime GPU disponible como libreria compartida.
+
+Para OpenCL:
+
+- OpenCV compilado con soporte OpenCL.
+- Runtime OpenCL del dispositivo que se quiera usar.
+
+Herramientas opcionales:
+
+- Python 3 para los scripts de benchmark y lanzamiento en cluster.
+- PlantUML y Java para regenerar diagramas.
+- Graphviz si se quieren renderizar diagramas PlantUML que dependan de `dot`.
+
+## Instalacion
+
+En Ubuntu o WSL, una instalacion base puede hacerse con:
 
 ```bash
 sudo apt-get update
 sudo apt-get install -y \
   cmake \
+  g++ \
   libopencv-dev \
   openmpi-bin \
   libopenmpi-dev \
   nvidia-cuda-toolkit \
-  default-jre \
-  plantuml \
-  graphviz
+  python3 \
+  python3-venv
 ```
 
-En esta WSL no habia permisos sudo sin contrasena, asi que PlantUML quedo instalado para el usuario:
+Si vas a usar el backend CUDA, instala ONNX Runtime GPU en un entorno virtual o
+exporta la ruta de la libreria manualmente:
 
 ```bash
-command -v plantuml
+python3 -m venv .venv
+source .venv/bin/activate
+pip install onnxruntime-gpu
 ```
 
-El wrapper apunta a:
-
-```text
-~/.local/share/plantuml/plantuml.jar
-```
-
-Si `~/.local/bin` no esta en tu `PATH`, puedes anadirlo con:
-
-```bash
-export PATH="$HOME/.local/bin:$PATH"
-```
-
-Los diagramas de este README usan `!pragma layout smetana`, por lo que se pueden renderizar sin Graphviz.
-
-## ONNX Runtime CUDA
-
-El proyecto carga ONNX Runtime de forma dinamica. La ruta esperada por defecto esta dentro de `.venv`:
-
-```text
-.venv/lib/python3.12/site-packages/onnxruntime/capi/
-.venv/lib64/python3.12/site-packages/onnxruntime/capi/
-```
-
-El detector CUDA tambien contempla rutas de Python 3.11 para localizar `libonnxruntime`, pero el bootstrap inicial de `LD_LIBRARY_PATH` esta preparado principalmente para Python 3.12. Si usas otra version de Python o una instalacion externa, exporta:
+El binario busca `libonnxruntime` en rutas habituales dentro de `.venv/`. Si la
+libreria esta en otro lugar, define:
 
 ```bash
 export RESCUE_ORT_LIBRARY=/ruta/a/libonnxruntime.so
 ```
 
-En WSL, si existe `/usr/lib/wsl/lib`, el binario la anade automaticamente antes de relanzarse para encontrar las librerias del driver NVIDIA.
-
-## Modelos incluidos
-
-El modelo por defecto es:
-
-```text
-models/yolo11s_1088.onnx
-```
-
-Variantes incluidas:
-
-- `models/yolo11n.onnx`: modelo ligero.
-- `models/yolo11s.onnx`: variante legacy a `640x640`.
-- `models/yolo11s_960.onnx`: mas resolucion espacial que `640`.
-- `models/yolo11s_1088.onnx`: valor por defecto, pensado para flujo 1080p.
-- `models/yolo11m.onnx`: mas pesado.
-- `models/yolo11l.onnx`: todavia mas pesado.
-
-El parametro `--resize-width` debe coincidir con el tamano de exportacion del ONNX:
-
-- `1088` para `yolo11s_1088.onnx`.
-- `960` para `yolo11s_960.onnx`.
-- `640` para `yolo11s.onnx`, `yolo11m.onnx` y `yolo11l.onnx`.
+En WSL, si existe `/usr/lib/wsl/lib`, el programa la anade al entorno de
+ejecucion para localizar las librerias del driver NVIDIA.
 
 ## Compilacion
 
-Compilacion por defecto:
+Compilacion con CUDA habilitado:
 
 ```bash
 cmake -S . -B build
@@ -194,16 +184,17 @@ cmake -S . -B build -DRESCUE_ENABLE_CUDA=OFF
 cmake --build build -j
 ```
 
-La arquitectura CUDA por defecto es `89`, adecuada para la RTX 4070 Laptop usada en el proyecto. Puedes cambiarla asi:
+La arquitectura CUDA por defecto es `89`. Si tu GPU necesita otra arquitectura,
+puedes indicarla durante la configuracion:
 
 ```bash
 cmake -S . -B build -DCMAKE_CUDA_ARCHITECTURES=86
 cmake --build build -j
 ```
 
-## Ejecucion rapida
+## Uso rapido
 
-Ejecucion recomendada en una maquina con una sola GPU NVIDIA:
+Ejecutar en una maquina con una GPU NVIDIA usando un maestro y un worker:
 
 ```bash
 mpirun -np 2 ./build/rescue_video_analyzer \
@@ -213,7 +204,7 @@ mpirun -np 2 ./build/rescue_video_analyzer \
   --scheduler dynamic
 ```
 
-Para evitar el coste de escribir video anotado durante benchmarks:
+Para benchmarks, normalmente interesa evitar la escritura del video anotado:
 
 ```bash
 mpirun -np 2 ./build/rescue_video_analyzer \
@@ -224,23 +215,42 @@ mpirun -np 2 ./build/rescue_video_analyzer \
   --no-annotated-video
 ```
 
-El binario tambien puede relanzar `mpirun` automaticamente si lo ejecutas sin launcher MPI, pero ese autolanzamiento solo mira la maquina local. En modo `--gpu-backend cuda`, crea `1` maestro y `1` worker por GPU CUDA visible local. En cluster, usa `scripts/launch_cluster.py` para descubrir las GPUs de las maquinas de `--ips` y lanzar `1` rank maestro mas tantos workers como GPUs detectadas; cada worker queda ligado a una GPU visible mediante su `local_worker_rank` y procesa lotes al ritmo que permita su dispositivo.
+El ejecutable tambien puede relanzarse con `mpirun` automaticamente si se
+invoca sin launcher MPI. En ejecuciones reproducibles o en cluster es preferible
+usar `mpirun`/`mpiexec` de forma explicita.
 
-## Ejemplos utiles
+## Opciones de ejecucion
 
-Usar el modelo de `960x960`:
-
-```bash
-mpirun -np 2 ./build/rescue_video_analyzer \
-  --input dataset/videoset2.mp4 \
-  --model models/yolo11s_960.onnx \
-  --resize-width 960 \
-  --output-dir output_yolo11s_960 \
-  --batch-size 8 \
-  --no-annotated-video
+```text
+--input <video>                         video de entrada, obligatorio
+--output-dir <dir>                      directorio de salida, por defecto output
+--batch-size <N>                        frames por lote MPI
+--processing-width <px>                 ancho de procesamiento, 0 para nativo
+--processing-height <px>                alto de procesamiento, 0 para nativo
+--gpu-device auto|<id>                  seleccion de GPU visible
+--gpu-backend auto|cuda|opencl          backend de inferencia
+--resize-width <px>                     tamano cuadrado de entrada YOLO
+--edge-threshold <N>                    umbral auxiliar de bordes
+--model <path>                          modelo ONNX
+--score-threshold <0..1>                confianza minima
+--nms-threshold <0..1>                  umbral de NMS
+--top-k <N>                             maximo de candidatos antes de NMS
+--scheduler dynamic|static-contiguous|static-round-robin
+--no-annotated-video                    desactiva el video anotado
 ```
 
-Forzar un dispositivo CUDA concreto:
+Aliases legacy aceptados:
+
+```text
+--yolo-model
+--yolo-conf
+--yolo-nms
+--yolo-top-k
+```
+
+### Ejemplos utiles
+
+Usar backend CUDA y seleccionar la GPU visible `0`:
 
 ```bash
 mpirun -np 2 ./build/rescue_video_analyzer \
@@ -262,7 +272,7 @@ mpirun -np 2 ./build/rescue_video_analyzer \
   --batch-size 8
 ```
 
-Ejecutar backend OpenCL:
+Ejecutar la ruta OpenCL:
 
 ```bash
 mpirun -np 2 ./build/rescue_video_analyzer \
@@ -272,38 +282,81 @@ mpirun -np 2 ./build/rescue_video_analyzer \
   --batch-size 8
 ```
 
-## Parametros de linea de comandos
+## Modelos ONNX
+
+El modelo por defecto es:
 
 ```text
---input <video>                         video de entrada, obligatorio
---output-dir <dir>                      directorio de salida, por defecto output
---batch-size <N>                        frames por lote MPI
---processing-width <px>                 ancho de procesamiento, 0 para nativo
---processing-height <px>                alto de procesamiento, 0 para nativo
---gpu-device auto|<id>                  seleccion de GPU visible
---gpu-backend auto|cuda|opencl          backend de worker
---resize-width <px>                     tamano cuadrado de entrada YOLO
---edge-threshold <N>                    umbral auxiliar de bordes
---model <path>                          modelo ONNX
---score-threshold <0..1>                confianza minima
---nms-threshold <0..1>                  umbral de NMS
---top-k <N>                             maximo de candidatos antes de NMS
---scheduler dynamic|static-contiguous|static-round-robin
---no-annotated-video                    no genera video anotado
+models/yolo11s_1088.onnx
 ```
 
-Aliases antiguos aceptados:
+Modelos incluidos:
+
+| Modelo | Resolucion recomendada | Comentario |
+| --- | ---: | --- |
+| `models/yolo11n.onnx` | `640` | Variante ligera. |
+| `models/yolo11s.onnx` | `640` | Variante small legacy. |
+| `models/yolo11s_960.onnx` | `960` | Mayor resolucion espacial. |
+| `models/yolo11s_1088.onnx` | `1088` | Valor por defecto para flujo 1080p. |
+| `models/yolo11m.onnx` | `640` | Variante mas pesada. |
+| `models/yolo11l.onnx` | `640` | Variante grande. |
+
+El valor de `--resize-width` debe coincidir con el tamano de exportacion del
+modelo ONNX:
+
+```bash
+mpirun -np 2 ./build/rescue_video_analyzer \
+  --input dataset/videoset2.mp4 \
+  --model models/yolo11s_960.onnx \
+  --resize-width 960 \
+  --output-dir output_yolo11s_960 \
+  --batch-size 8
+```
+
+## Salidas generadas
+
+![Datos y salidas](docs/diagrams/data_outputs.svg)
+
+Cada ejecucion escribe sus resultados en `--output-dir`:
 
 ```text
---yolo-model
---yolo-conf
---yolo-nms
---yolo-top-k
+output/
+|-- frame_results.csv
+|-- summary.json
+`-- annotated_people.mp4
 ```
+
+Si se usa `--no-annotated-video`, no se genera `annotated_people.mp4`.
+
+Campos principales de `frame_results.csv`:
+
+| Campo | Significado |
+| --- | --- |
+| `frame_index` | Indice del frame dentro del video. |
+| `worker_rank` | Rank MPI que proceso el frame. |
+| `gpu_device_id` | GPU visible usada por el worker. |
+| `timestamp_ms` | Instante temporal del frame. |
+| `people_count` | Numero de detecciones de persona. |
+| `mean_intensity` | Intensidad media auxiliar del frame. |
+| `edge_density` | Densidad de bordes auxiliar. |
+| `read_ms` | Tiempo asociado a lectura/envio. |
+| `preprocess_ms` | Tiempo de preprocesado. |
+| `detection_ms` | Tiempo de inferencia. |
+| `processing_ms` | Tiempo total de procesamiento del frame. |
+
+`summary.json` incluye:
+
+- Metadatos del video.
+- Configuracion efectiva de la ejecucion.
+- Promedios de tiempos por etapa.
+- Estadisticas de deteccion.
+- Balanceo de carga por worker.
+- Tiempos globales de procesamiento y escritura.
 
 ## Benchmarks
 
-Script para probar varias combinaciones de mundo MPI y scheduler:
+El script `scripts/benchmark_parallel.sh` ejecuta varias combinaciones de
+tamano de mundo MPI y scheduler:
 
 ```bash
 MPI_WORLD_SIZES="2 3 4" \
@@ -311,27 +364,28 @@ SCHEDULERS="dynamic static-contiguous static-round-robin" \
 ./scripts/benchmark_parallel.sh dataset/videoset.mp4 parallel_benchmarks
 ```
 
-El script escribe una tabla TSV por stdout y guarda cada ejecucion en:
+El script imprime una tabla TSV por stdout y guarda cada ejecucion en:
 
 ```text
 parallel_benchmarks/np<N>_<scheduler>/
 ```
 
-En una maquina con una sola GPU NVIDIA, no conviene interpretar `np=3` o `np=4` como escalado multi-GPU puro: ahi hay mas workers que GPUs CUDA disponibles. Para una comparacion limpia de inferencia CUDA en una GPU, usa `np=2`. En cluster o multi-GPU, configura `np = 1 + numero_total_de_GPUs` para mantener el esquema natural de `1` maestro y `1` worker por GPU.
+Para comparar escalado multi-GPU de forma limpia, usa como regla:
 
-Prueba local reciente sobre `dataset/videoset2.mp4`, `mpirun -np 2`, `--batch-size 8`, `--no-annotated-video`:
-
-```json
-{
-  "average_people_per_frame": 29.863,
-  "average_preprocess_ms": 3.841,
-  "average_detection_ms": 16.158,
-  "average_processing_ms": 20.090,
-  "total_wall_ms": 6399.037
-}
+```text
+numero de procesos MPI = 1 maestro + numero de GPUs participantes
 ```
 
-## Cluster MPI
+En una maquina con una unica GPU CUDA, `mpirun -np 2` es la configuracion
+natural. Lanzar mas workers que GPUs reales puede introducir contencion o
+mezclar rutas CUDA/OpenCL/CPU.
+
+## Ejecucion en cluster
+
+En cluster, `dataset/`, `models/` y el ejecutable deben existir en todos los
+nodos o estar disponibles mediante un filesystem compartido.
+
+![Despliegue](docs/diagrams/deployment.svg)
 
 Lanzamiento automatico con descubrimiento de GPUs:
 
@@ -340,6 +394,14 @@ Lanzamiento automatico con descubrimiento de GPUs:
   --ips localhost,192.168.1.55 \
   --args "--input dataset/videoset2.mp4 --output-dir output_cluster --batch-size 8 --scheduler dynamic"
 ```
+
+El script:
+
+- Sondea cada nodo mediante SSH.
+- Cuenta GPUs NVIDIA con `nvidia-smi`.
+- Cuenta dispositivos OpenCL con `clinfo`, si esta disponible.
+- Genera `hosts_cluster.txt`.
+- Lanza `mpiexec` con un rank maestro y los workers detectados.
 
 Lanzamiento manual con hostfile:
 
@@ -354,68 +416,72 @@ mpirun --hostfile hosts_cluster.txt -np 4 ./build/rescue_video_analyzer \
 
 Requisitos practicos para cluster:
 
-- La misma ruta de ejecutable debe existir en los nodos.
-- `dataset/` y `models/` deben estar accesibles desde todos los nodos.
-- Las variables de entorno de CUDA/ONNX Runtime deben resolverse en cada nodo.
-- SSH sin interaccion debe estar configurado para OpenMPI.
-- `scripts/launch_cluster.py` cuenta GPUs con `nvidia-smi` y `clinfo`; si un nodo no reporta GPUs, reserva un slot de fallback CPU/OpenCL para no dejarlo fuera del hostfile.
+- SSH sin interaccion configurado para OpenMPI.
+- Misma ruta del ejecutable en los nodos, o filesystem compartido.
+- Rutas de `dataset/` y `models/` accesibles desde todos los nodos.
+- Variables de entorno CUDA/ONNX Runtime resueltas en cada nodo.
 
-## Diagramas PlantUML
+## Diagramas
 
-Los fuentes estan en:
+Los fuentes PlantUML estan en:
 
 ```text
 docs/diagrams/*.puml
 ```
 
-Renderizar todos los diagramas:
+Para regenerar los SVG:
 
 ```bash
 plantuml -tsvg docs/diagrams/*.puml
 ```
 
-Si el comando `plantuml` no esta en `PATH`, usa:
-
-```bash
-~/.local/bin/plantuml -tsvg docs/diagrams/*.puml
-```
-
-Los SVG generados se guardan junto a los `.puml` y son los que se muestran en este README.
+Si `plantuml` esta instalado en una ruta de usuario, asegurate de que esa ruta
+esta en `PATH` antes de ejecutar el comando.
 
 ## Troubleshooting
 
-`Error: The --input argument is required.`
+### `The --input argument is required`
 
-Pasa siempre `--input <video>`.
+El parametro `--input <video>` es obligatorio.
 
-`Model file does not exist`
+### `Input video does not exist`
 
-Comprueba la ruta de `--model`. El valor por defecto es `models/yolo11s_1088.onnx`.
+Comprueba la ruta del video y que sea accesible desde el proceso que ejecuta el
+rank maestro. En cluster, la ruta debe existir tambien en el nodo maestro.
 
-`No visible CUDA devices were found`
+### `Model file does not exist`
 
-Comprueba `nvidia-smi` dentro de WSL/Ubuntu. En WSL tambien deben estar visibles las librerias en `/usr/lib/wsl/lib`.
+Comprueba `--model`. El valor por defecto es:
 
-`Unable to locate libonnxruntime`
-
-Activa la `.venv`, instala `onnxruntime-gpu` o exporta `RESCUE_ORT_LIBRARY`.
-
-Rendimiento peor al lanzar mas workers que GPUs
-
-El flujo normal es un worker por GPU participante. Si lanzas mas workers que GPUs reales, puede haber contencion por el mismo dispositivo o mezcla con OpenCL/CPU. En una sola GPU CUDA, usa `mpirun -np 2` para medir la ruta principal.
-
-PlantUML avisa de que falta `dot`
-
-Los diagramas del repo usan `smetana`, asi que se renderizan sin Graphviz. Si quieres soporte completo para cualquier diagrama PlantUML, instala Graphviz con sudo:
-
-```bash
-sudo apt-get install -y graphviz
+```text
+models/yolo11s_1088.onnx
 ```
 
-## Estado actual comprobado
+### `Unable to locate libonnxruntime`
 
-Comprobado en esta maquina:
+Instala `onnxruntime-gpu` en `.venv/` o exporta `RESCUE_ORT_LIBRARY` apuntando a
+`libonnxruntime.so`.
 
-- `cmake --build build -j` termina correctamente.
-- `mpirun -np 2 ./build/rescue_video_analyzer --input dataset/videoset2.mp4 --output-dir /tmp/rescue_project_check --batch-size 8 --no-annotated-video` termina correctamente.
-- PlantUML de usuario renderiza todos los diagramas SVG de `docs/diagrams/`.
+### `No visible CUDA devices were found`
+
+Comprueba que `nvidia-smi` funciona en el entorno donde lanzas el binario. En
+WSL, revisa tambien que `/usr/lib/wsl/lib` exista y sea accesible.
+
+### Rendimiento peor al aumentar workers
+
+El diseno esperado es un worker por GPU participante. Si hay mas workers que
+GPUs, varios procesos pueden competir por el mismo dispositivo o caer a otra
+ruta de inferencia. Para medir una sola GPU CUDA, usa `mpirun -np 2`.
+
+## Estado del proyecto
+
+Proyecto academico de arquitectura paralela centrado en procesamiento distribuido
+de video, comparacion de schedulers MPI y aceleracion GPU. El codigo esta
+preparado para ejecucion local y en cluster, pero los resultados de rendimiento
+dependen del hardware, drivers, version de OpenCV/ONNX Runtime y tamano del
+modelo usado.
+
+## Licencia
+
+Este repositorio no declara licencia todavia. Antes de publicarlo, anade un
+archivo `LICENSE` con la licencia que quieras aplicar al codigo y a los assets.
