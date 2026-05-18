@@ -390,6 +390,14 @@ rescue::AppConfig parse_args(int argc, char** argv) {
 
 int main(int argc, char** argv) {
     try {
+        const char* home = std::getenv("HOME");
+        if (home != nullptr) {
+            std::filesystem::path cache_dir = std::filesystem::path(home) / ".cache" / "opencv";
+            std::error_code ec;
+            std::filesystem::create_directories(cache_dir, ec);
+            setenv("OPENCV_OCL4DNN_CONFIG_PATH", cache_dir.string().c_str(), 0);
+        }
+
         ensure_runtime_library_path(argv);
         const auto config = parse_args(argc, argv);
         ensure_default_mpi_world(argc, argv, config);

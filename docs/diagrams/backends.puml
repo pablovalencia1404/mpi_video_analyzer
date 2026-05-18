@@ -1,0 +1,40 @@
+@startuml
+!pragma layout smetana
+title Rescue Video Analyzer - Backends de inferencia
+
+skinparam backgroundColor #FFFFFF
+skinparam componentStyle rectangle
+skinparam shadowing false
+skinparam ArrowColor #355070
+skinparam ComponentBorderColor #355070
+skinparam ComponentBackgroundColor #F7FAFC
+
+component "run_worker()" as Worker
+
+package "Backend CUDA principal" as CUDA {
+  component "activate_worker_gpu_cuda()\nseleccion por local_worker_rank" as BindCuda
+  component "preprocess_frame_cuda()\nkernels CUDA" as PreCuda
+  component "CudaPeopleDetector\nONNX Runtime CUDA" as DetCuda
+  component "GPU VRAM\ntensor NCHW" as Vram
+}
+
+package "Backend OpenCL alternativo" as OPENCL {
+  component "activate_worker_gpu_opencl()" as BindOpenCL
+  component "preprocess_frame_opencl()\nOpenCV UMat" as PreOpenCL
+  component "OpenCLPeopleDetector\nOpenCV DNN" as DetOpenCL
+  component "Memoria unificada\nUMat" as UMat
+}
+
+Worker --> BindCuda : --gpu-backend cuda\no auto con CUDA disponible
+BindCuda --> PreCuda
+PreCuda --> Vram
+Vram --> DetCuda
+
+Worker --> BindOpenCL : --gpu-backend opencl\no GPU OpenCL disponible
+BindOpenCL --> PreOpenCL
+PreOpenCL --> UMat
+UMat --> DetOpenCL
+
+DetCuda --> Worker : DetectionBox[]
+DetOpenCL --> Worker : DetectionBox[]
+@enduml

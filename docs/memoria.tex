@@ -1,0 +1,650 @@
+\documentclass[12pt,a4paper]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{geometry}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{longtable}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{float}
+\usepackage{amsmath}
+
+\geometry{margin=2.5cm}
+\hypersetup{
+    colorlinks=true,
+    linkcolor=black,
+    urlcolor=blue,
+    citecolor=black
+}
+
+\lstdefinestyle{console}{
+    basicstyle=\ttfamily\small,
+    breaklines=true,
+    frame=single,
+    backgroundcolor=\color{gray!8},
+    columns=fullflexible
+}
+
+\lstdefinestyle{cpp}{
+    language=C++,
+    basicstyle=\ttfamily\small,
+    keywordstyle=\color{blue!70!black},
+    commentstyle=\color{green!45!black},
+    stringstyle=\color{red!60!black},
+    breaklines=true,
+    frame=single,
+    backgroundcolor=\color{gray!8},
+    columns=fullflexible
+}
+
+\title{\textbf{Memoria de la pr\'actica}\\[0.3cm]
+Analizador distribuido de v\'ideo con MPI y GPU}
+\author{Asignatura: Arquitecturas Paralelas}
+\date{\today}
+
+\begin{document}
+
+\maketitle
+\thispagestyle{empty}
+
+\begin{abstract}
+Este documento describe la arquitectura, funcionamiento e implementaci\'on del proyecto
+\textit{MPI Video Analyzer}, una aplicaci\'on C++ para analizar v\'ideos y detectar personas
+por frame mediante modelos YOLO11 exportados a ONNX. El inter\'es principal de la pr\'actica
+est\'a en el uso combinado de paralelismo distribuido con MPI y aceleraci\'on de c\'omputo en
+GPU mediante CUDA u OpenCL. La aplicaci\'on divide el v\'ideo en lotes de frames, reparte
+dichos lotes entre procesos worker, ejecuta el preprocesado y la inferencia en paralelo, y
+agrega los resultados en el proceso maestro para producir ficheros CSV, JSON y opcionalmente
+un v\'ideo anotado.
+\end{abstract}
+
+\newpage
+\tableofcontents
+\newpage
+
+\section{Introducci\'on}
+
+El objetivo del proyecto es procesar un v\'ideo de entrada para detectar y contar personas en
+cada frame. La aplicaci\'on est\'a pensada para escenarios de vigilancia o rescate, donde el
+tiempo de procesamiento puede reducirse distribuyendo el trabajo entre varios procesos y,
+cuando existen dispositivos disponibles, acelerando las fases m\'as costosas en GPU.
+
+Desde el punto de vista de Arquitecturas Paralelas, el programa combina dos niveles de
+paralelismo:
+
+\begin{itemize}
+    \item \textbf{Paralelismo de grano grueso con MPI}: el v\'ideo se divide en lotes de frames
+    y cada proceso worker procesa lotes independientes.
+    \item \textbf{Paralelismo masivo en GPU}: cada worker puede usar CUDA u OpenCL para
+    acelerar el preprocesado de imagen y la inferencia del modelo neuronal.
+\end{itemize}
+
+El resultado no es solo una aplicaci\'on funcional de visi\'on por computador, sino tambi\'en
+una plataforma para estudiar reparto de carga, escalabilidad, sobrecostes de comunicaci\'on,
+tama\~no de lote y heterogeneidad entre dispositivos.
+
+\section{Resumen del proyecto}
+
+El ejecutable principal se llama \texttt{rescue\_video\_analyzer}. Se invoca con un v\'ideo de
+entrada, un modelo YOLO11 en formato ONNX y varios par\'ametros de ejecuci\'on. Su salida
+principal se escribe en el directorio configurado mediante \texttt{--output-dir}.
+
+\begin{itemize}
+    \item \texttt{frame\_results.csv}: m\'etricas por frame, incluyendo rank que lo proces\'o,
+    GPU usada, conteo de personas y tiempos por etapa.
+    \item \texttt{summary.json}: resumen global con metadatos del v\'ideo, configuraci\'on MPI,
+    estad\'isticas de detecci\'on, balanceo de carga y tiempos totales.
+    \item \texttt{annotated\_people.mp4} o \texttt{annotated\_people.avi}: v\'ideo anotado con
+    cajas de detecci\'on y conteo visual, salvo que se use \texttt{--no-annotated-video}.
+\end{itemize}
+
+\section{Tecnolog\'ias utilizadas}
+
+La pr\'actica integra varias tecnolog\'ias de computaci\'on paralela y visi\'on artificial.
+
+\begin{longtable}{p{0.25\textwidth}p{0.65\textwidth}}
+\toprule
+\textbf{Tecnolog\'ia} & \textbf{Uso en el proyecto} \\
+\midrule
+C++17 & Lenguaje principal de la aplicaci\'on. \\
+OpenMPI & Ejecuci\'on distribuida mediante procesos MPI. \\
+CUDA & Backend principal para preprocesado GPU e inferencia con ONNX Runtime CUDA. \\
+OpenCL & Backend alternativo mediante OpenCV \texttt{UMat} y OpenCV DNN. \\
+OpenCV & Lectura/escritura de v\'ideo, transformaciones de imagen, NMS y generaci\'on del v\'ideo anotado. \\
+ONNX Runtime & Ejecuci\'on del modelo YOLO11 en el backend CUDA. \\
+YOLO11 ONNX & Modelo de detecci\'on de objetos; se filtra la clase persona. \\
+CMake & Sistema de compilaci\'on del proyecto. \\
+\bottomrule
+\end{longtable}
+
+\section{Organizaci\'on del c\'odigo}
+
+La estructura principal del repositorio es la siguiente:
+
+\begin{lstlisting}[style=console]
+.
+|-- CMakeLists.txt
+|-- README.md
+|-- dataset/                 # videos de prueba
+|-- include/rescue/          # cabeceras publicas
+|-- models/                  # modelos YOLO11 en ONNX
+|-- scripts/
+|   |-- benchmark_parallel.sh
+|   `-- launch_cluster.py
+`-- src/                     # implementacion C++, CUDA y OpenCL
+\end{lstlisting}
+
+Los m\'odulos m\'as importantes son:
+
+\begin{itemize}
+    \item \texttt{src/main.cpp}: parseo de argumentos, preparaci\'on del entorno y arranque MPI.
+    \item \texttt{src/mpi\_runtime.cpp}: l\'ogica maestro-worker, planificadores y comunicaci\'on MPI.
+    \item \texttt{src/gpu\_preprocess.cu}: kernels CUDA de preprocesado.
+    \item \texttt{src/gpu\_preprocess\_opencl.cpp}: preprocesado alternativo con OpenCV/OpenCL.
+    \item \texttt{src/yolo\_detector\_cuda.cpp}: inferencia YOLO11 con ONNX Runtime CUDA.
+    \item \texttt{src/yolo\_detector\_opencl.cpp}: inferencia YOLO11 con OpenCV DNN y OpenCL.
+    \item \texttt{src/output\_writer.cpp}: generaci\'on de CSV, JSON y v\'ideo anotado.
+    \item \texttt{src/tracker.cpp}: tracker sencillo usado solo para visualizaci\'on.
+\end{itemize}
+
+\section{Arquitectura paralela}
+
+\subsection{Modelo SPMD}
+
+La aplicaci\'on sigue un modelo SPMD (\textit{Single Program, Multiple Data}): todos los
+procesos ejecutan el mismo binario, pero su comportamiento depende del rank MPI.
+
+\begin{itemize}
+    \item El \textbf{rank 0} act\'ua como proceso maestro.
+    \item Los \textbf{ranks 1..N} act\'uan como workers.
+\end{itemize}
+
+El maestro no ejecuta inferencia. Su trabajo principal es leer frames, construir lotes,
+enviarlos a los workers, recibir resultados y escribir las salidas. Los workers reciben
+lotes, ejecutan el preprocesado y la detecci\'on, y devuelven un paquete de resultados por
+frame.
+
+\subsection{Descomposici\'on del problema}
+
+El problema se descompone por frames. Cada frame puede procesarse de forma independiente
+para obtener detecciones de personas, por lo que existe paralelismo de datos natural. En vez
+de enviar frames individuales, el programa agrupa frames en lotes de tama\~no
+\texttt{batch\_size}. Esto reduce el n\'umero de mensajes MPI y permite amortizar parte del
+coste de comunicaci\'on.
+
+Si el v\'ideo tiene $F$ frames y el tama\~no de lote es $B$, el n\'umero aproximado de tareas es:
+
+\[
+    T = \left\lceil \frac{F}{B} \right\rceil
+\]
+
+Cada tarea contiene un \texttt{BatchHeader} y un bloque de bytes con los frames codificados
+como matrices \texttt{CV\_8UC3}.
+
+\subsection{Topolog\'ia maestro-worker}
+
+La comunicaci\'on MPI utiliza etiquetas separadas para cabeceras y cargas:
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lll}
+\toprule
+\textbf{Etiqueta} & \textbf{Sentido} & \textbf{Contenido} \\
+\midrule
+\texttt{kTagBatchHeader} & Maestro $\rightarrow$ worker & Cabecera del lote. \\
+\texttt{kTagBatchPayload} & Maestro $\rightarrow$ worker & Bytes de los frames. \\
+\texttt{kTagResultHeader} & Worker $\rightarrow$ maestro & Cabecera del resultado. \\
+\texttt{kTagResultPayload} & Worker $\rightarrow$ maestro & Array de \texttt{FramePacket}. \\
+\bottomrule
+\end{tabular}
+\caption{Mensajes MPI principales.}
+\end{table}
+
+Las estructuras simples se env\'ian como tipos MPI contiguos de bytes, ya que
+\texttt{BatchHeader}, \texttt{ResultHeader}, \texttt{FrameResult} y \texttt{FramePacket} son
+trivialmente copiables. Esta decisi\'on simplifica el transporte de datos estructurados, aunque
+presupone que los procesos ejecutan una versi\'on binaria compatible de la aplicaci\'on.
+
+\subsection{Planificadores}
+
+El proyecto implementa tres modos de scheduling:
+
+\begin{itemize}
+    \item \textbf{\texttt{dynamic}}: el maestro entrega un nuevo lote al worker que acaba de
+    terminar. Es el modo recomendado en entornos heterog\'eneos porque se adapta al ritmo real
+    de cada GPU.
+    \item \textbf{\texttt{static-contiguous}}: cada worker recibe un bloque contiguo de frames.
+    Reduce decisiones en tiempo de ejecuci\'on, pero puede producir desequilibrio si unos
+    frames son m\'as costosos que otros o si los dispositivos no tienen el mismo rendimiento.
+    \item \textbf{\texttt{static-round-robin}}: los lotes se asignan por turnos a los workers.
+    Reparte mejor que el bloque contiguo cuando el coste cambia a lo largo del v\'ideo, aunque
+    no reacciona al rendimiento real de cada worker.
+\end{itemize}
+
+El scheduling din\'amico es especialmente relevante en Arquitecturas Paralelas porque reduce
+el tiempo ocioso de los workers. Cuando un worker termina, el maestro recibe su resultado con
+\texttt{MPI\_Probe(MPI\_ANY\_SOURCE, ...)} y le asigna trabajo nuevo si quedan lotes pendientes.
+
+\section{Flujo de ejecuci\'on}
+
+\subsection{Arranque}
+
+El programa valida los argumentos de l\'inea de comandos y comprueba que existan tanto el
+v\'ideo de entrada como el modelo ONNX. Tambi\'en prepara rutas de bibliotecas din\'amicas para
+ONNX Runtime y CUDA, especialmente en entornos WSL o virtualenv.
+
+Si el binario se ejecuta sin \texttt{mpirun}, puede relanzarse autom\'aticamente con un mundo
+MPI por defecto. En CUDA, el esquema natural es:
+
+\[
+    \texttt{world\_size} = 1 + \texttt{numero\_de\_GPUs}
+\]
+
+donde el proceso adicional es el maestro.
+
+\subsection{Trabajo del maestro}
+
+El maestro realiza los siguientes pasos:
+
+\begin{enumerate}
+    \item Abre el v\'ideo con OpenCV y obtiene metadatos: resoluci\'on, FPS, n\'umero de frames y duraci\'on.
+    \item Construye un plan de lotes seg\'un \texttt{batch-size}.
+    \item Env\'ia un primer lote a cada worker disponible.
+    \item Espera resultados de cualquier worker.
+    \item Inserta los \texttt{FramePacket} recibidos en un vector global.
+    \item Env\'ia un nuevo lote al worker que ha quedado libre, o una se\~nal de parada si ya no hay trabajo.
+    \item Ordena los resultados por \texttt{frame\_index}.
+    \item Escribe las salidas CSV, JSON y v\'ideo anotado.
+\end{enumerate}
+
+Este dise\~no centraliza la entrada/salida de v\'ideo en el maestro y evita que varios procesos
+lean simult\'aneamente el mismo fichero. A cambio, el maestro se convierte en punto de
+coordinaci\'on y en posible cuello de botella si el n\'umero de workers crece mucho.
+
+\subsection{Trabajo de cada worker}
+
+Cada worker ejecuta un bucle hasta recibir una cabecera de lote con \texttt{frame\_count = 0}.
+Para cada lote:
+
+\begin{enumerate}
+    \item Recibe la cabecera y el payload de frames.
+    \item Materializa vistas \texttt{cv::Mat} sobre el bloque de bytes recibido.
+    \item Realiza una fase de calentamiento del backend si todav\'ia no se ha hecho.
+    \item Redimensiona cada frame a la resoluci\'on de procesamiento si es necesario.
+    \item Ejecuta el preprocesado GPU: \textit{letterbox}, normalizaci\'on, conversi\'on a tensor y m\'etricas auxiliares.
+    \item Ejecuta la inferencia YOLO11.
+    \item Filtra detecciones de clase persona y aplica NMS cuando corresponde.
+    \item Construye un \texttt{FramePacket} por frame y lo devuelve al maestro.
+\end{enumerate}
+
+\section{Backends de GPU}
+
+\subsection{Ruta CUDA}
+
+La ruta CUDA es la ruta principal del proyecto. Se compila si \texttt{RESCUE\_ENABLE\_CUDA=ON}
+en CMake. En esta ruta, cada worker activa una GPU mediante \texttt{cudaSetDevice}. Si no se
+fuerza un dispositivo con \texttt{--gpu-device}, el programa usa el rank local del worker para
+repartir workers entre GPUs visibles:
+
+\[
+    \texttt{device\_id} =
+    \texttt{local\_worker\_rank} \bmod \texttt{visible\_device\_count}
+\]
+
+El preprocesado CUDA se implementa en \texttt{src/gpu\_preprocess.cu}. El kernel principal:
+
+\begin{itemize}
+    \item Lee la imagen BGR de entrada.
+    \item Calcula el reescalado con \textit{letterbox}, manteniendo la relaci\'on de aspecto.
+    \item Aplica interpolaci\'on bilineal.
+    \item Convierte BGR a RGB.
+    \item Normaliza los valores a $[0,1]$.
+    \item Escribe el tensor en formato \texttt{NCHW}, esperado por YOLO.
+    \item Genera una imagen en gris auxiliar para calcular intensidad media y densidad de bordes.
+\end{itemize}
+
+Un segundo kernel calcula estad\'isticas con operaciones at\'omicas: suma de intensidades y
+conteo de p\'ixeles cuyo gradiente supera el umbral \texttt{edge-threshold}. La inferencia se
+realiza con ONNX Runtime y el \textit{CUDA Execution Provider}. El tensor de entrada se crea
+directamente sobre memoria CUDA, evitando copiarlo a CPU antes de ejecutar el modelo.
+
+\subsection{Ruta OpenCL}
+
+La ruta OpenCL es una alternativa basada en OpenCV. Usa \texttt{cv::UMat} para permitir que
+OpenCV ejecute operaciones sobre OpenCL cuando est\'a disponible. El preprocesado incluye
+redimensionado, \textit{letterbox}, creaci\'on del blob y c\'alculo de m\'etricas de imagen con
+Sobel. La inferencia se realiza con \texttt{cv::dnn::readNetFromONNX} y target
+\texttt{DNN\_TARGET\_OPENCL}. Si OpenCL no est\'a disponible, OpenCV puede caer a CPU.
+
+\subsection{Backend autom\'atico}
+
+Con \texttt{--gpu-backend auto}, el worker prefiere CUDA si hay dispositivos visibles y el
+proyecto fue compilado con soporte CUDA. En caso contrario, utiliza la ruta OpenCL/CPU. Este
+comportamiento facilita ejecutar el mismo binario en equipos con distintas capacidades.
+
+\section{Modelo de detecci\'on YOLO11}
+
+Los modelos incluidos en \texttt{models/} est\'an exportados a ONNX. El modelo por defecto es:
+
+\begin{lstlisting}[style=console]
+models/yolo11s_1088.onnx
+\end{lstlisting}
+
+El par\'ametro \texttt{--resize-width} debe coincidir con el tama\~no de entrada usado al
+exportar el modelo. Por ejemplo, \texttt{yolo11s\_1088.onnx} se utiliza con
+\texttt{--resize-width 1088}. Tras la inferencia, el programa decodifica la salida de YOLO,
+filtra la clase persona (\texttt{class\_id = 0}) y descarta detecciones con confianza inferior
+a \texttt{--score-threshold}. En salidas no end-to-end se aplica \textit{Non-Maximum
+Suppression} con \texttt{--nms-threshold} y \texttt{--top-k}.
+
+\section{Estructuras de datos}
+
+\begin{longtable}{p{0.25\textwidth}p{0.65\textwidth}}
+\toprule
+\textbf{Estructura} & \textbf{Funci\'on} \\
+\midrule
+\texttt{AppConfig} & Configuraci\'on global: rutas, tama\~no de lote, backend GPU, modelo, thresholds y scheduler. \\
+\texttt{VideoMetadata} & Metadatos del v\'ideo: resoluci\'on, FPS, frames y duraci\'on. \\
+\texttt{BatchHeader} & Cabecera enviada por MPI para describir un lote de frames. \\
+\texttt{FrameResult} & Resultado num\'erico de un frame: rank, GPU, conteo y tiempos. \\
+\texttt{DetectionBox} & Caja de detecci\'on con coordenadas, confianza y clase. \\
+\texttt{FramePacket} & Paquete completo devuelto al maestro: \texttt{FrameResult} y hasta 128 detecciones. \\
+\bottomrule
+\end{longtable}
+
+El l\'imite \texttt{kMaxDetectionsPerFrame = 128} acota el tama\~no del paquete MPI por frame.
+Esto simplifica la comunicaci\'on porque todos los \texttt{FramePacket} tienen tama\~no fijo.
+
+\section{M\'etricas y salidas}
+
+La aplicaci\'on registra tiempos por frame:
+
+\begin{itemize}
+    \item \texttt{read\_ms}: coste medio asociado a recibir el lote desde MPI.
+    \item \texttt{preprocess\_ms}: tiempo de redimensionado/preprocesado.
+    \item \texttt{detection\_ms}: tiempo de inferencia y decodificaci\'on.
+    \item \texttt{processing\_ms}: suma de recepci\'on, preprocesado e inferencia por frame.
+\end{itemize}
+
+En \texttt{summary.json} tambi\'en se escriben m\'etricas globales:
+
+\begin{itemize}
+    \item \texttt{distributed\_processing\_ms}: tiempo desde que el maestro empieza a repartir trabajo hasta que recibe todos los resultados.
+    \item \texttt{output\_write\_ms}: tiempo de escritura de salidas.
+    \item \texttt{total\_wall\_ms}: suma de procesamiento distribuido y escritura.
+    \item \texttt{load\_balance}: frames procesados por worker, m\'inimo, m\'aximo y ratio m\'aximo/media.
+    \item \texttt{worker\_stats}: estad\'isticas desglosadas por rank.
+\end{itemize}
+
+Estas m\'etricas permiten analizar si el programa escala, si hay workers ociosos, si el cuello
+de botella est\'a en la inferencia, en el preprocesado, en la comunicaci\'on MPI o en la
+escritura de resultados.
+
+\section{Compilaci\'on}
+
+La compilaci\'on normal usa CMake:
+
+\begin{lstlisting}[style=console]
+cmake -S . -B build
+cmake --build build -j
+\end{lstlisting}
+
+Para compilar sin CUDA y usar solo OpenCL/CPU:
+
+\begin{lstlisting}[style=console]
+cmake -S . -B build -DRESCUE_ENABLE_CUDA=OFF
+cmake --build build -j
+\end{lstlisting}
+
+La arquitectura CUDA por defecto en el proyecto es \texttt{89}, adecuada para la GPU usada
+durante el desarrollo. Puede cambiarse con:
+
+\begin{lstlisting}[style=console]
+cmake -S . -B build -DCMAKE_CUDA_ARCHITECTURES=86
+cmake --build build -j
+\end{lstlisting}
+
+\section{Ejecuci\'on}
+
+La ejecuci\'on recomendada en una m\'aquina con una GPU NVIDIA es:
+
+\begin{lstlisting}[style=console]
+mpirun -np 2 ./build/rescue_video_analyzer \
+  --input dataset/videoset2.mp4 \
+  --output-dir output \
+  --batch-size 8 \
+  --scheduler dynamic
+\end{lstlisting}
+
+Para medir rendimiento sin incluir el coste de generar v\'ideo anotado:
+
+\begin{lstlisting}[style=console]
+mpirun -np 2 ./build/rescue_video_analyzer \
+  --input dataset/videoset2.mp4 \
+  --output-dir output_bench \
+  --batch-size 8 \
+  --scheduler dynamic \
+  --no-annotated-video
+\end{lstlisting}
+
+El modo cluster puede lanzarse con el script:
+
+\begin{lstlisting}[style=console]
+./scripts/launch_cluster.py \
+  --ips localhost,192.168.1.55 \
+  --args "--input dataset/videoset2.mp4 --output-dir output_cluster --batch-size 8 --scheduler dynamic"
+\end{lstlisting}
+
+Este script sondea GPUs NVIDIA y OpenCL en los nodos, genera un \texttt{hosts\_cluster.txt}
+y lanza \texttt{mpiexec}. En un cluster real, las rutas de \texttt{dataset/}, \texttt{models/}
+y del ejecutable deben estar disponibles en todos los nodos o en un sistema de ficheros
+compartido.
+
+\section{Benchmarking}
+
+El script \texttt{scripts/benchmark\_parallel.sh} automatiza pruebas variando el tama\~no del
+mundo MPI y el scheduler:
+
+\begin{lstlisting}[style=console]
+MPI_WORLD_SIZES="2 3 4" \
+SCHEDULERS="dynamic static-contiguous static-round-robin" \
+./scripts/benchmark_parallel.sh dataset/videoset.mp4 parallel_benchmarks
+\end{lstlisting}
+
+El script escribe una tabla TSV con:
+
+\begin{itemize}
+    \item \texttt{world\_size}
+    \item \texttt{scheduler}
+    \item \texttt{total\_wall\_ms}
+    \item \texttt{distributed\_processing\_ms}
+    \item \texttt{average\_detection\_ms}
+    \item \texttt{average\_processing\_ms}
+    \item \texttt{average\_people\_per\_frame}
+    \item directorio de salida
+\end{itemize}
+
+Una prueba local recogida en el README, usando \texttt{dataset/videoset2.mp4},
+\texttt{mpirun -np 2}, \texttt{--batch-size 8} y \texttt{--no-annotated-video}, obtuvo:
+
+\begin{table}[H]
+\centering
+\begin{tabular}{lr}
+\toprule
+\textbf{M\'etrica} & \textbf{Valor} \\
+\midrule
+Personas medias por frame & 29.863 \\
+Preprocesado medio & 3.841 ms \\
+Detecci\'on media & 16.158 ms \\
+Procesamiento medio & 20.090 ms \\
+Tiempo total & 6399.037 ms \\
+\bottomrule
+\end{tabular}
+\caption{Ejemplo de resultado local documentado.}
+\end{table}
+
+Es importante interpretar estos datos con cuidado. En una m\'aquina con una sola GPU, ejecutar
+\texttt{np=3} o \texttt{np=4} no implica escalado multi-GPU real: varios workers competir\'an
+por el mismo dispositivo o caer\'an a rutas alternativas. Para medir la ruta CUDA principal en
+una sola GPU, la configuraci\'on m\'as limpia es \texttt{np=2}: un maestro y un worker.
+
+\section{An\'alisis desde Arquitecturas Paralelas}
+
+\subsection{Granularidad}
+
+La unidad de trabajo es el lote de frames. Un lote demasiado peque\~no incrementa el n\'umero de
+mensajes MPI y el coste de scheduling. Un lote demasiado grande reduce la capacidad del
+scheduler din\'amico para balancear carga, porque un worker lento puede quedarse con una tarea
+grande durante demasiado tiempo. El par\'ametro \texttt{--batch-size} permite estudiar ese
+compromiso.
+
+\subsection{Comunicaci\'on frente a c\'omputo}
+
+Cada lote requiere enviar al worker los bytes completos de los frames. Para un frame
+\texttt{CV\_8UC3}, el tama\~no aproximado es:
+
+\[
+    S = ancho \cdot alto \cdot 3 \text{ bytes}
+\]
+
+Por tanto, el coste de comunicaci\'on crece con la resoluci\'on de procesamiento y el tama\~no
+del lote. Sin embargo, el coste dominante suele estar en inferencia YOLO, especialmente con
+modelos grandes o resoluciones de entrada altas. El dise\~no busca que la comunicaci\'on quede
+amortizada por el coste computacional de cada lote.
+
+\subsection{Balanceo de carga}
+
+El modo din\'amico mejora el balanceo cuando:
+
+\begin{itemize}
+    \item Hay GPUs con distinto rendimiento.
+    \item Alg\'un nodo cae a OpenCL/CPU.
+    \item El coste de detecci\'on var\'ia por frame.
+    \item Hay contenci\'on por compartir dispositivo.
+\end{itemize}
+
+El fichero \texttt{summary.json} incluye el ratio:
+
+\[
+    \texttt{max\_to\_mean\_ratio} =
+    \frac{\text{frames del worker con m\'as carga}}
+         {\text{media de frames por worker activo}}
+\]
+
+Un valor cercano a 1 indica buen balanceo en n\'umero de frames. Aun as\'i, el n\'umero de
+frames no siempre equivale a tiempo: dos workers pueden procesar el mismo n\'umero de frames
+con tiempos distintos si sus GPUs no son equivalentes.
+
+\subsection{Heterogeneidad}
+
+El proyecto contempla heterogeneidad de hardware. El backend autom\'atico decide entre CUDA y
+OpenCL/CPU seg\'un disponibilidad. Adem\'as, el script de cluster asigna un slot por GPU
+detectada y un slot adicional para el maestro en el nodo inicial. Esta aproximaci\'on permite
+usar varios nodos con distinta configuraci\'on, aunque la eficiencia final depende de que el
+scheduler mantenga ocupados los dispositivos r\'apidos sin quedar bloqueado por los lentos.
+
+\subsection{Cuellos de botella}
+
+Los posibles cuellos de botella son:
+
+\begin{itemize}
+    \item \textbf{Maestro}: lee el v\'ideo, serializa lotes y recibe resultados. Con muchos
+    workers puede limitar la escalabilidad.
+    \item \textbf{Comunicaci\'on MPI}: el env\'io de frames completos puede ser costoso en red.
+    \item \textbf{GPU}: la inferencia YOLO es la fase m\'as pesada por frame.
+    \item \textbf{Memoria}: hay copias CPU-GPU en preprocesado CUDA y almacenamiento temporal
+    de frames.
+    \item \textbf{Salida}: la generaci\'on de v\'ideo anotado puede distorsionar benchmarks, por
+    eso existe \texttt{--no-annotated-video}.
+\end{itemize}
+
+\section{Limitaciones}
+
+\begin{itemize}
+    \item El maestro centraliza la lectura del v\'ideo, lo que simplifica la coherencia pero
+    puede limitar escalabilidad en clusters grandes.
+    \item Los frames se env\'ian completos por MPI; no hay compresi\'on ni lectura distribuida
+    desde cada nodo.
+    \item \texttt{FramePacket} fija un m\'aximo de 128 detecciones por frame para facilitar la
+    comunicaci\'on.
+    \item El tracking no se usa para modificar el c\'omputo distribuido: solo para el v\'ideo
+    anotado y el acumulado visual.
+    \item La ruta OpenCL depende de la disponibilidad real de OpenCL en OpenCV; si no existe,
+    puede ejecutarse en CPU.
+\end{itemize}
+
+\section{Posibles mejoras}
+
+\begin{itemize}
+    \item Usar comunicaci\'on no bloqueante con \texttt{MPI\_Isend} y \texttt{MPI\_Irecv} para
+    solapar comunicaci\'on y c\'omputo.
+    \item Permitir lectura distribuida del v\'ideo si el formato y el almacenamiento compartido
+    lo permiten.
+    \item Enviar frames ya redimensionados para reducir bytes transmitidos, comparando el coste
+    de mover preprocesado al maestro frente a mantenerlo en workers.
+    \item Agrupar inferencias por batch real en GPU para aprovechar mejor el throughput del
+    modelo.
+    \item Implementar afinidad m\'as fina entre ranks, NUMA y GPUs en nodos multi-GPU.
+    \item Registrar trazas temporales completas para representar gr\'aficamente ocupaci\'on de
+    workers y fases de pipeline.
+\end{itemize}
+
+\section{Conclusiones}
+
+El proyecto implementa una arquitectura paralela h\'ibrida adecuada para una pr\'actica de
+Arquitecturas Paralelas. A nivel distribuido, usa MPI para repartir lotes de frames entre
+workers independientes. A nivel de dispositivo, emplea CUDA u OpenCL para acelerar el
+preprocesado y la inferencia de un modelo YOLO11. El dise\~no permite comparar schedulers,
+medir balanceo de carga y observar la relaci\'on entre comunicaci\'on, c\'omputo y escritura de
+resultados.
+
+La principal fortaleza del sistema es que el problema tiene paralelismo de datos natural: los
+frames pueden procesarse de forma independiente y agregarse posteriormente ordenando por
+\texttt{frame\_index}. El scheduler din\'amico aprovecha esta independencia para adaptarse a
+hardware heterog\'eneo. Como limitaci\'on, el maestro concentra la lectura y distribuci\'on de
+frames, por lo que una mejora futura clara ser\'ia estudiar t\'ecnicas de solapamiento,
+comunicaci\'on no bloqueante y lectura distribuida.
+
+\appendix
+\section{Par\'ametros principales}
+
+\begin{longtable}{p{0.35\textwidth}p{0.55\textwidth}}
+\toprule
+\textbf{Par\'ametro} & \textbf{Descripci\'on} \\
+\midrule
+\texttt{--input <video>} & V\'ideo de entrada. Obligatorio. \\
+\texttt{--output-dir <dir>} & Directorio de salida. \\
+\texttt{--batch-size <N>} & Frames por lote MPI. \\
+\texttt{--processing-width <px>} & Ancho de procesamiento; 0 usa resoluci\'on nativa. \\
+\texttt{--processing-height <px>} & Alto de procesamiento; 0 usa resoluci\'on nativa. \\
+\texttt{--gpu-device auto|<id>} & Selecci\'on de GPU visible. \\
+\texttt{--gpu-backend auto|cuda|opencl} & Backend de c\'omputo usado por los workers. \\
+\texttt{--resize-width <px>} & Tama\~no cuadrado de entrada YOLO. \\
+\texttt{--edge-threshold <N>} & Umbral para densidad de bordes auxiliar. \\
+\texttt{--model <path>} & Modelo ONNX. \\
+\texttt{--score-threshold <0..1>} & Confianza m\'inima de detecci\'on. \\
+\texttt{--nms-threshold <0..1>} & Umbral de NMS. \\
+\texttt{--top-k <N>} & M\'aximo de candidatos antes de NMS. \\
+\texttt{--scheduler <modo>} & \texttt{dynamic}, \texttt{static-contiguous} o \texttt{static-round-robin}. \\
+\texttt{--no-annotated-video} & Desactiva generaci\'on del v\'ideo anotado. \\
+\bottomrule
+\end{longtable}
+
+\section{Dependencias}
+
+En Ubuntu/WSL, las dependencias principales son:
+
+\begin{lstlisting}[style=console]
+sudo apt-get update
+sudo apt-get install -y \
+  cmake \
+  libopencv-dev \
+  openmpi-bin \
+  libopenmpi-dev \
+  nvidia-cuda-toolkit
+\end{lstlisting}
+
+\end{document}

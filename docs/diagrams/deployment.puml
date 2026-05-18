@@ -1,0 +1,35 @@
+@startuml
+!pragma layout smetana
+title Rescue Video Analyzer - Despliegue en una maquina o cluster
+
+skinparam backgroundColor #FFFFFF
+skinparam shadowing false
+skinparam nodeBorderColor #355070
+skinparam nodeBackgroundColor #F7FAFC
+skinparam artifactBorderColor #6D597A
+skinparam artifactBackgroundColor #F8F4FA
+
+node "Nodo maestro" as Node0 {
+  artifact "rank 0\nmaestro" as R0
+  artifact "dataset/\nmodels/\noutput/" as Files0
+  node "GPU visible 0" as GPU0
+  artifact "rank 1\nworker CUDA/OpenCL" as R1
+}
+
+node "Nodo worker opcional" as Node1 {
+  artifact "rank 2\nworker CUDA/OpenCL" as R2
+  node "GPU visible 0..M" as GPU1
+  artifact "dataset/\nmodels/\naccesibles por ruta compartida" as Files1
+}
+
+cloud "OpenMPI\nTCP/SSH/hostfile" as MPI
+
+R0 -- MPI
+MPI -- R1
+MPI -- R2
+R1 -- GPU0
+R2 -- GPU1
+R0 -- Files0
+R1 -- Files0
+R2 -- Files1
+@enduml
